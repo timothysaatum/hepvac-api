@@ -186,3 +186,26 @@ class UserService:
             List of User models
         """
         return await self.repo.get_users(skip=skip, limit=limit)
+    
+
+    async def get_user_by_id(self, user_id: uuid.UUID) -> User:
+
+        user = await self.repo.get_user_by_id(user_id)
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="User with the given id not found"
+            )
+
+        return user
+    
+    async def delete_user(self, user_id: uuid.UUID) -> bool:
+        user = await self.repo.get_user_by_id(user_id)
+
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="User with the given id not found"
+            )
+        await self.repo.delete_user(user)
+        return True

@@ -65,7 +65,9 @@ def create_app() -> FastAPI:
             status_code=500,
             content={
                 "detail": "Internal server error",
-                "error": str(exc) if settings.ENVIRONMENT != "production" else "Server error",
+                "error": (
+                    str(exc) if settings.ENVIRONMENT != "production" else "Server error"
+                ),
             },
         )
 
@@ -85,7 +87,7 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
-
+    # app.add_middleware(SecurityMiddleware)
     # ---------------------- ROUTES ----------------------
     app.include_router(api_router, prefix=settings.API_PREFIX)
 

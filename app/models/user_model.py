@@ -101,13 +101,15 @@ class User(Base):
         TIMESTAMP(timezone=True),
         nullable=True,
     )
-
-    # Foreign key linking user to facility
-    facility_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+    facility_id = mapped_column(
         PGUUID(as_uuid=True),
-        ForeignKey("facilities.id", ondelete="SET NULL"),
+        ForeignKey(
+            "facilities.id",
+            ondelete="SET NULL",
+            use_alter=True,
+            name="fk_user_facility_id",
+        ),
         nullable=True,
-        index=True,
     )
 
     # Relationships
@@ -123,7 +125,7 @@ class User(Base):
         back_populates="staff",
         lazy="selectin",
     )
-    
+
     managed_facility: Mapped[Optional["Facility"]] = relationship(
         "Facility",
         foreign_keys="[Facility.facility_manager_id]",

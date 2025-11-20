@@ -9,9 +9,6 @@ from app.schemas.patient_schemas import (
     PrescriptionCreateSchema,
     PrescriptionUpdateSchema,
     PrescriptionResponseSchema,
-    PatientReminderCreateSchema,
-    PatientReminderUpdateSchema,
-    PatientReminderResponseSchema,
 )
 from app.services.patient_service import PatientService
 from app.core.utils import logger

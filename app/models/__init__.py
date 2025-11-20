@@ -16,9 +16,13 @@ from .patient_model import (
     RegularPatient,
     Vaccination, 
     Child, 
-    PatientWallet, 
     Payment,
     Prescription,
     MedicationSchedule,
     PatientReminder
+)
+from app.middlewares.device_trust import (
+    TrustedDevice,
+    LoginAttempt,
+    GeographicRestriction,
 )

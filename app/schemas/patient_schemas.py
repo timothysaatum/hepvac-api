@@ -1,8 +1,7 @@
 from datetime import date, datetime
-from decimal import Decimal
 from enum import Enum
 import re
-from typing import Optional
+from typing import Dict, Optional
 import uuid
 
 from pydantic import BaseModel, field_validator
@@ -39,10 +38,11 @@ class PaymentStatus(str, Enum):
     COMPLETED = "completed"
     OVERDUE = "overdue"
 
+
 class DoseType(str, Enum):
     FIRST_DOSE = "1st dose"
     SECOND_DOSE = "2nd dose"
-    THIRD_DOSE = "3RD dose"
+    THIRD_DOSE = "3rd dose"
 
 
 class ReminderType(str, Enum):
@@ -73,10 +73,8 @@ class PatientBaseSchema(BaseModel):
     sex: Sex
     age: int
     date_of_birth: Optional[date] = None
-    # These fields are auto-populated from authenticated user - not required in request
     facility_id: Optional[uuid.UUID] = None
     created_by_id: Optional[uuid.UUID] = None
-    
 
     @field_validator("name")
     @classmethod
@@ -131,28 +129,36 @@ class PatientBaseSchema(BaseModel):
 # ============= Pregnant Patient Schemas =============
 class PregnantPatientBaseSchema(PatientBaseSchema):
     """Base schema for pregnant patient."""
+
     sex: Sex = Sex.FEMALE
     expected_delivery_date: Optional[date] = None
-    gestational_age_weeks: Optional[int] = None
-    gravida: Optional[int] = None
-    para: Optional[int] = None
-    risk_factors: Optional[str] = None
-    notes: Optional[str] = None
+    # gestational_age_weeks: Optional[int] = None
+    # gravida: Optional[int] = None
+    # para: Optional[int] = None
+    # risk_factors: Optional[str] = None
+    # notes: Optional[str] = None
 
-    @field_validator("gestational_age_weeks")
-    @classmethod
-    def validate_gestational_age(cls, v: Optional[int]) -> Optional[int]:
-        """Validate gestational age."""
-        if v is not None and (v < 0 or v > 42):
-            raise ValueError("Gestational age must be between 0 and 42 weeks")
-        return v
+    # @field_validator("gestational_age_weeks")
+    # @classmethod
+    # def validate_gestational_age(cls, v: Optional[int]) -> Optional[int]:
+    #     """Validate gestational age."""
+    #     if v is not None and (v < 0 or v > 42):
+    #         raise ValueError("Gestational age must be between 0 and 42 weeks")
+    #     return v
 
-    @field_validator("gravida", "para")
+    # @field_validator("gravida", "para")
+    # @classmethod
+    # def validate_pregnancy_count(cls, v: Optional[int]) -> Optional[int]:
+    #     """Validate gravida/para count."""
+    #     if v is not None and v < 0:
+    #         raise ValueError("Pregnancy count cannot be negative")
+    #     return v
+
+    @field_validator("age")
     @classmethod
-    def validate_pregnancy_count(cls, v: Optional[int]) -> Optional[int]:
-        """Validate gravida/para count."""
-        if v is not None and v < 0:
-            raise ValueError("Pregnancy count cannot be negative")
+    def validate_age(cls, v):
+        if v < 10:
+            raise ValueError("Pregant woman age must not below 10")
         return v
 
 
@@ -173,14 +179,14 @@ class PregnantPatientUpdateSchema(BaseModel):
     name: Optional[str] = None
     phone: Optional[str] = None
     age: Optional[int] = None
-    date_of_birth: Optional[date] = None
+    # date_of_birth: Optional[date] = None
     expected_delivery_date: Optional[date] = None
     actual_delivery_date: Optional[date] = None
-    gestational_age_weeks: Optional[int] = None
-    gravida: Optional[int] = None
-    para: Optional[int] = None
-    risk_factors: Optional[str] = None
-    notes: Optional[str] = None
+    # gestational_age_weeks: Optional[int] = None
+    # gravida: Optional[int] = None
+    # para: Optional[int] = None
+    # risk_factors: Optional[str] = None
+    # notes: Optional[str] = None
     status: Optional[PatientStatus] = None
     updated_by_id: Optional[uuid.UUID] = None
 
@@ -230,21 +236,45 @@ class PregnantPatientResponseSchema(BaseModel):
     patient_type: str
     status: PatientStatus
     expected_delivery_date: Optional[date] = None
-    gestational_age_weeks: Optional[int] = None
+    # gestational_age_weeks: Optional[int] = None
     actual_delivery_date: Optional[date] = None
     facility_id: uuid.UUID
     created_by_id: Optional[uuid.UUID] = None
     updated_by_id: Optional[uuid.UUID] = None
     created_at: datetime
     updated_at: datetime
-
+    links: Dict[str, str]
     model_config = {"from_attributes": True}
+
+    @classmethod
+    def from_patient(cls, patient):
+        """Create schema including HATEOAS links."""
+        base_id = str(patient.id)
+        return cls(
+            **patient.__dict__,
+            links={
+                "purchase_vaccine": f"/api/v1/purchase-vaccine/{base_id}",
+                "update_patient": (
+                    f"/api/v1/patients/pregnant/{base_id}"
+                    if patient.patient_type == PatientType.PREGNANT.value
+                    else f"/api/v1/patients/regular/{base_id}"
+                ),
+                "convert_to_regular": f"/api/v1/patients/pregnant/{base_id}/convert",
+                "create_regular_patient": "/api/v1/patients/regular",
+                "get_patient": (
+                    f"/api/v1/patients/regular/{base_id}"
+                    if patient.patient_type == PatientType.REGULAR.value
+                    else f"/api/v1/patients/pregnant/{base_id}"
+                ),
+                "delete_patient": f"/api/v1/patients/{base_id}",
+            },
+        )
 
 
 # ============= Regular Patient Schemas =============
 class RegularPatientBaseSchema(PatientBaseSchema):
     """Base schema for regular patient."""
-    
+
     diagnosis_date: Optional[date] = None
     viral_load: Optional[str] = None
     last_viral_load_date: Optional[date] = None
@@ -331,77 +361,31 @@ class RegularPatientResponseSchema(RegularPatientBaseSchema):
     updated_by_id: Optional[uuid.UUID] = None
     created_at: datetime
     updated_at: datetime
+    links: Dict[str, str]
 
     model_config = {"from_attributes": True}
 
-
-# ============= Vaccination Schemas =============
-class VaccinationBaseSchema(BaseModel):
-    """Base schema for vaccination."""
-
-    dose_number: DoseType = DoseType.FIRST_DOSE
-    dose_date: date
-    batch_number: str
-    # Auto-populated from authenticated user
-    administered_by_id: Optional[uuid.UUID] = None
-    notes: Optional[str] = None
-
-    @field_validator("dose_number")
     @classmethod
-    def validate_dose_number(cls, v: int) -> int:
-        """Validate dose number."""
-        if v not in [1, 2, 3]:
-            raise ValueError("Dose number must be 1, 2, or 3")
-        return v
-
-    @field_validator("batch_number")
-    @classmethod
-    def validate_batch_number(cls, v: str) -> str:
-        """Validate batch number."""
-        if not v or not v.strip():
-            raise ValueError("Batch number cannot be empty")
-
-        v = v.strip()
-
-        if len(v) < 3 or len(v) > 100:
-            raise ValueError("Batch number must be between 3 and 100 characters")
-
-        return v
-
-    model_config = {"from_attributes": True}
-
-
-class VaccinationCreateSchema(VaccinationBaseSchema):
-    """
-    Schema for creating a new vaccination record.
-
-    Note: patient_id and administered_by_id are auto-populated.
-    Do not include patient_id in request body (comes from URL path).
-    """
-
-    # This will be set from URL path parameter
-    patient_id: Optional[uuid.UUID] = None
-
-
-class VaccinationUpdateSchema(BaseModel):
-    """Schema for updating a vaccination record."""
-
-    dose_date: Optional[date] = None
-    batch_number: Optional[str] = None
-    notes: Optional[str] = None
-
-    model_config = {"from_attributes": True}
-
-
-class VaccinationResponseSchema(VaccinationBaseSchema):
-    """Schema for vaccination response."""
-
-    id: uuid.UUID
-    patient_id: uuid.UUID
-    administered_by_id: Optional[uuid.UUID] = None
-    created_at: datetime
-
-    model_config = {"from_attributes": True}
+    def from_patient(cls, patient):
+        """Create schema including HATEOAS links."""
+        base_id = str(patient.id)
+        return cls(
+            **patient.__dict__,
+            links={
+                "purchase_vaccine": f"/api/v1/purchase-vaccine/{base_id}",
+                "update_patient": (
+                    f"/api/v1/patients/pregnant/{base_id}"
+                    if patient.patient_type == PatientType.PREGNANT.value
+                    else f"/api/v1/patients/regular/{base_id}"
+                ),
+                "get_patient": (
+                    f"/api/v1/patients/regular/{base_id}"
+                    if patient.patient_type == PatientType.REGULAR.value
+                    else f"/api/v1/patients/pregant/{base_id}"
+                ),
+                "delete_patient": f"/api/v1/patients/{base_id}",
+            },
+        )
 
 
 # ============= Child Schemas =============
@@ -462,108 +446,6 @@ class ChildResponseSchema(ChildBaseSchema):
     test_date: Optional[date] = None
     created_at: datetime
     updated_at: datetime
-
-    model_config = {"from_attributes": True}
-
-
-# ============= Wallet & Payment Schemas =============
-class PatientWalletBaseSchema(BaseModel):
-    """Base schema for patient wallet."""
-
-    total_amount: Decimal
-
-    @field_validator("total_amount")
-    @classmethod
-    def validate_total_amount(cls, v: Decimal) -> Decimal:
-        """Validate total amount."""
-        if v < 0:
-            raise ValueError("Total amount cannot be negative")
-        return v
-
-    model_config = {"from_attributes": True}
-
-
-class PatientWalletCreateSchema(PatientWalletBaseSchema):
-    """
-    Schema for creating a patient wallet.
-
-    Note: patient_id is auto-populated from URL path parameter.
-    """
-
-    # This will be set from URL path parameter
-    patient_id: Optional[uuid.UUID] = None
-
-
-class PatientWalletUpdateSchema(BaseModel):
-    """Schema for updating a patient wallet."""
-
-    total_amount: Optional[Decimal] = None
-    amount_paid: Optional[Decimal] = None
-
-    @field_validator("total_amount")
-    @classmethod
-    def validate_total_amount(cls, v: Optional[Decimal]) -> Optional[Decimal]:
-        """Validate total amount."""
-        if v is not None and v < 0:
-            raise ValueError("Total amount cannot be negative")
-        return v
-
-    model_config = {"from_attributes": True}
-
-
-class PatientWalletResponseSchema(PatientWalletBaseSchema):
-    """Schema for patient wallet response."""
-
-    id: uuid.UUID
-    patient_id: uuid.UUID
-    amount_paid: Decimal
-    balance: Decimal
-    payment_status: PaymentStatus
-    created_at: datetime
-    updated_at: datetime
-
-    model_config = {"from_attributes": True}
-
-
-class PaymentBaseSchema(BaseModel):
-    """Base schema for payment."""
-
-    amount: Decimal
-    payment_date: date
-    payment_method: Optional[str] = None
-    reference_number: Optional[str] = None
-    notes: Optional[str] = None
-
-    @field_validator("amount")
-    @classmethod
-    def validate_amount(cls, v: Decimal) -> Decimal:
-        """Validate payment amount."""
-        if v <= 0:
-            raise ValueError("Payment amount must be greater than zero")
-        return v
-
-    model_config = {"from_attributes": True}
-
-
-class PaymentCreateSchema(PaymentBaseSchema):
-    """
-    Schema for creating a payment.
-
-    Note: wallet_id and received_by_id are auto-populated.
-    """
-
-    # These will be set from URL path parameter and authenticated user
-    wallet_id: Optional[uuid.UUID] = None
-    received_by_id: Optional[uuid.UUID] = None
-
-
-class PaymentResponseSchema(PaymentBaseSchema):
-    """Schema for payment response."""
-
-    id: uuid.UUID
-    wallet_id: uuid.UUID
-    received_by_id: Optional[uuid.UUID] = None
-    created_at: datetime
 
     model_config = {"from_attributes": True}
 
@@ -775,8 +657,6 @@ class ConvertToRegularPatientSchema(BaseModel):
     """Schema for converting pregnant patient to regular patient."""
 
     actual_delivery_date: date
-    # diagnosis_date: Optional[date] = None
-    # treatment_start_date: Optional[date] = None
     treatment_regimen: Optional[str] = None
     notes: Optional[str] = None
 

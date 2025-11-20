@@ -6,6 +6,7 @@ class Settings(BaseSettings):
 
     ENVIRONMENT: str
     DATABASE_URL: str
+    PRODUCTION_DB_URL: str
     SECRET_KEY: str
     ALEMBIC_DB_URL: str
 

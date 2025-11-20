@@ -23,7 +23,7 @@ from app.services.facility_service import FacilityService
 from app.core.utils import logger
 
 
-router = APIRouter(prefix="/facilities", tags=["facilities"])
+router = APIRouter(prefix="/facility", tags=["facilities"])
 
 
 @router.post(

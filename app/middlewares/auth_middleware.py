@@ -130,44 +130,6 @@ async def authenticate_user(
         )
         return False, None, "Authentication failed"
 
-
-# def set_refresh_token_cookie(
-#     response: Response, refresh_token: str, request: Request = None
-# ):
-#     """
-#     Set refresh token cookie with proper security settings.
-
-#     Args:
-#         response: FastAPI response object
-#         refresh_token: The refresh token to set
-#         request: FastAPI request object (optional, for scheme detection)
-#     """
-#     logger.log_debug("Setting refresh token cookie")
-
-#     # Determine if we should use secure cookies
-#     is_secure = IS_PRODUCTION
-#     if request:
-#         is_secure = request.url.scheme == "https" or IS_PRODUCTION
-
-#     # Set the cookie with appropriate security settings
-#     response.set_cookie(
-#         key="refresh_token",
-#         value=refresh_token,
-#         httponly=True,
-#         secure=is_secure,
-#         samesite="none" if is_secure else "lax",
-#         max_age=60 * 60 * 24 * REFRESH_TOKEN_EXPIRE_DAYS,
-#         domain=None,
-#     )
-
-
-#     logger.log_info(
-#         {
-#             "event_type": "refresh_token_cookie_set",
-#             "secure": is_secure,
-#             "samesite": "none" if is_secure else "lax",
-#         }
-#     )
 def set_refresh_token_cookie(
     response: Response,
     refresh_token: str,

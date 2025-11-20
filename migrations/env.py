@@ -1,5 +1,6 @@
 import nest_asyncio
 import asyncio
+
 nest_asyncio.apply()
 from logging.config import fileConfig
 
@@ -23,10 +24,15 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from app.db.base import Base
 from app.config.config import settings
 from app.models import *
+
 target_metadata = Base.metadata
 
-
-config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)
+DATABASE_URL = (
+    settings.DATABASE_URL
+    if settings.ENVIRONMENT == "development"
+    else settings.PRODUCTION_DB_URL
+)
+config.set_main_option("sqlalchemy.url", DATABASE_URL)
 
 
 def run_migrations_offline():
@@ -53,7 +59,7 @@ async def run_migrations_online():
     )
 
     async with connectable.connect() as connection:
-        
+
         await connection.run_sync(do_run_migrations)
     await connectable.dispose()
 

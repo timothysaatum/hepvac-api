@@ -10,13 +10,11 @@ from app.models.patient_model import (
     RegularPatient,
     Vaccination,
     Child,
-    PatientWallet,
     Payment,
     Prescription,
     MedicationSchedule,
     PatientReminder,
 )
-from app.schemas.patient_schemas import PaymentStatus
 
 
 class PatientRepository:
@@ -177,7 +175,7 @@ class PatientRepository:
                 selectinload(poly_patient.created_by),
                 selectinload(poly_patient.updated_by),
                 selectinload(poly_patient.vaccinations),
-                selectinload(poly_patient.wallet),
+                selectinload(poly_patient.vaccine_purchases),
                 selectinload(poly_patient.prescriptions),
                 selectinload(poly_patient.medication_schedules),
                 selectinload(poly_patient.reminders),
@@ -210,46 +208,6 @@ class PatientRepository:
 
         return patients, total_count
 
-    # ============= Vaccination Operations =============
-    async def create_vaccination(self, vaccination: Vaccination) -> Vaccination:
-        """Create a new vaccination record."""
-        self.db.add(vaccination)
-        await self.db.commit()
-        await self.db.refresh(vaccination)
-        return vaccination
-
-    async def get_vaccination_by_id(
-        self, vaccination_id: uuid.UUID
-    ) -> Optional[Vaccination]:
-        """Get vaccination by ID."""
-        result = await self.db.execute(
-            select(Vaccination).where(Vaccination.id == vaccination_id)
-        )
-        return result.scalars().first()
-
-    async def get_patient_vaccinations(
-        self, patient_id: uuid.UUID
-    ) -> List[Vaccination]:
-        """Get all vaccinations for a patient."""
-        result = await self.db.execute(
-            select(Vaccination)
-            .where(Vaccination.patient_id == patient_id)
-            .order_by(Vaccination.dose_number)
-        )
-        return result.scalars().all()
-
-    async def update_vaccination(self, vaccination: Vaccination) -> Vaccination:
-        """Update vaccination record."""
-        self.db.add(vaccination)
-        await self.db.commit()
-        await self.db.refresh(vaccination)
-        return vaccination
-
-    async def delete_vaccination(self, vaccination: Vaccination) -> None:
-        """Delete vaccination record."""
-        await self.db.delete(vaccination)
-        await self.db.commit()
-
     # ============= Child Operations =============
     async def create_child(self, child: Child) -> Child:
         """Create a new child record."""
@@ -260,7 +218,6 @@ class PatientRepository:
 
     async def get_child_by_id(self, child_id: uuid.UUID) -> Optional[Child]:
         """Get child by ID."""
-        print(f"=================={child_id}")
         result = await self.db.execute(select(Child).where(Child.id == child_id))
         return result.scalars().first()
 
@@ -284,62 +241,6 @@ class PatientRepository:
         """Delete child record."""
         await self.db.delete(child)
         await self.db.commit()
-
-    # ============= Wallet Operations =============
-    async def create_wallet(self, wallet: PatientWallet) -> PatientWallet:
-        """Create a new patient wallet."""
-        self.db.add(wallet)
-        await self.db.commit()
-        await self.db.refresh(wallet)
-        return wallet
-
-    async def get_wallet_by_patient_id(
-        self, patient_id: uuid.UUID
-    ) -> Optional[PatientWallet]:
-        """Get wallet by patient ID."""
-        result = await self.db.execute(
-            select(PatientWallet).where(PatientWallet.patient_id == patient_id)
-        )
-        return result.scalars().first()
-
-    async def get_wallet_by_id(self, wallet_id: uuid.UUID) -> Optional[PatientWallet]:
-        """Get wallet by ID."""
-        result = await self.db.execute(
-            select(PatientWallet).where(PatientWallet.id == wallet_id)
-        )
-        return result.scalars().first()
-
-    async def update_wallet(self, wallet: PatientWallet) -> PatientWallet:
-        """Update wallet."""
-        self.db.add(wallet)
-        if wallet.amount_paid == wallet.total_amount:
-            wallet.payment_status = PaymentStatus.COMPLETED
-        self.db.add(wallet)
-        await self.db.commit()
-        await self.db.refresh(wallet)
-        return wallet
-
-    # ============= Payment Operations =============
-    async def create_payment(self, payment: Payment) -> Payment:
-        """Create a new payment."""
-        self.db.add(payment)
-        await self.db.commit()
-        await self.db.refresh(payment)
-        return payment
-
-    async def get_payment_by_id(self, payment_id: uuid.UUID) -> Optional[Payment]:
-        """Get payment by ID."""
-        result = await self.db.execute(select(Payment).where(Payment.id == payment_id))
-        return result.scalars().first()
-
-    async def get_wallet_payments(self, wallet_id: uuid.UUID) -> List[Payment]:
-        """Get all payments for a wallet."""
-        result = await self.db.execute(
-            select(Payment)
-            .where(Payment.wallet_id == wallet_id)
-            .order_by(Payment.payment_date.desc())
-        )
-        return result.scalars().all()
 
     # ============= Prescription Operations =============
     async def create_prescription(self, prescription: Prescription) -> Prescription:

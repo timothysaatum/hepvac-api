@@ -38,13 +38,15 @@ class Facility(Base):
         String(255),
         nullable=True,
     )
-
-    # Foreign key for facility manager
-    facility_manager_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+    facility_manager_id = mapped_column(
         PGUUID(as_uuid=True),
-        ForeignKey("users.id", ondelete="SET NULL"),
+        ForeignKey(
+            "users.id",
+            ondelete="SET NULL",
+            use_alter=True,
+            name="fk_facility_manager_id",
+        ),
         nullable=True,
-        index=True,
     )
 
     created_at: Mapped[datetime] = mapped_column(

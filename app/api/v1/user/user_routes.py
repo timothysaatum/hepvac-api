@@ -7,6 +7,7 @@ from sqlalchemy.orm import selectinload
 from sqlalchemy import select
 from app.core.security import get_current_user
 from app.core.sessions import SessionManager, TokenManager
+from app.middlewares.security_middleware import DeviceTrustService
 from app.models.rbac import Role
 from app.models.user_model import User
 from app.schemas.user_schemas import (
@@ -82,6 +83,93 @@ async def create_user(
         )
 
 
+# @router.post("/login", response_model=AuthResponse)
+# async def login_user(
+#     login_data: UserLoginSchema,
+#     request: Request,
+#     response: Response,
+#     db: AsyncSession = Depends(get_db),
+# ):
+#     """
+#     Authenticate user and create session.
+
+#     Args:
+#         login_data: Login credentials
+#         request: FastAPI request object
+#         response: FastAPI response object
+#         db: Database session
+
+#     Returns:
+#         AuthResponse: Authenticated user information with access token
+
+#     Raises:
+#         HTTPException: If authentication fails
+#     """
+#     user_service = UserService(db)
+#     device_data = SessionManager.extract_device_info(request)
+#     user_agent = device_data["user_agent"]
+#     ip_address = device_data["client_ip"]
+#     try:
+#         success, user, token_or_error = await user_service.login_user(
+#             username=login_data.username,
+#             password=login_data.password,
+#             ip_address=ip_address,
+#             request=request,
+#             response=response,
+#             user_agent=user_agent
+#         )
+
+#         if not success or not user:
+#             logger.log_warning(
+#                 {
+#                     "event": "login_failed",
+#                     "username": login_data.username,
+#                     "ip_address": ip_address,
+#                     "reason": token_or_error,
+#                 }
+#             )
+#             raise HTTPException(
+#                 status_code=status.HTTP_401_UNAUTHORIZED,
+#                 detail=token_or_error or "Invalid credentials",
+#             )
+
+#         logger.log_info(
+#             {
+#                 "event": "login_success",
+#                 "username": login_data.username,
+#                 "ip_address": ip_address,
+#                 "user_id": str(user.id),
+#             }
+#         )
+
+#         # Validate user to UserSchema
+#         user_data = UserSchema.model_validate(user, from_attributes=True)
+
+#         # Create AuthResponse by adding access_token
+#         return AuthResponse(
+#             **user_data.model_dump(),
+#             access_token=token_or_error
+#         )
+
+#     except HTTPException:
+#         # Re-raise HTTP exceptions as-is
+#         raise
+
+#     except Exception as e:
+#         # Log unexpected errors
+#         logger.log_error(
+#             {
+#                 "event": "login_error",
+#                 "username": login_data.username,
+#                 "ip_address": ip_address,
+#                 "error": str(e),
+#                 "error_type": type(e).__name__,
+#             }
+#         )
+#         raise HTTPException(
+#             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+#             detail="An unexpected error occurred during login",
+#         )
 @router.post("/login", response_model=AuthResponse)
 async def login_user(
     login_data: UserLoginSchema,
@@ -102,20 +190,22 @@ async def login_user(
         AuthResponse: Authenticated user information with access token
 
     Raises:
-        HTTPException: If authentication fails
+        HTTPException: If authentication fails or device is not trusted
     """
     user_service = UserService(db)
     device_data = SessionManager.extract_device_info(request)
     user_agent = device_data["user_agent"]
     ip_address = device_data["client_ip"]
+
     try:
+        # Step 1: Authenticate user credentials
         success, user, token_or_error = await user_service.login_user(
             username=login_data.username,
             password=login_data.password,
             ip_address=ip_address,
             request=request,
             response=response,
-            user_agent=user_agent
+            user_agent=user_agent,
         )
 
         if not success or not user:
@@ -132,12 +222,37 @@ async def login_user(
                 detail=token_or_error or "Invalid credentials",
             )
 
+        # Step 2: Check device trust AFTER successful authentication
+        try:
+            is_trusted, message, is_new = (
+                await DeviceTrustService.check_and_register_device(
+                    request=request, user_id=user.id, db=db
+                )
+            )
+        except HTTPException as device_error:
+            # Device not trusted - log the blocked attempt
+            logger.log_warning(
+                {
+                    "event": "device_trust_blocked",
+                    "username": login_data.username,
+                    "user_id": str(user.id),
+                    "ip_address": ip_address,
+                    "user_agent": user_agent,
+                    "reason": device_error.detail,
+                }
+            )
+            # Re-raise the device trust error to block login
+            raise device_error
+
+        # Step 3: Device is trusted, proceed with login
         logger.log_info(
             {
                 "event": "login_success",
                 "username": login_data.username,
                 "ip_address": ip_address,
                 "user_id": str(user.id),
+                "device_trusted": True,
+                "new_device": is_new,
             }
         )
 
@@ -145,13 +260,10 @@ async def login_user(
         user_data = UserSchema.model_validate(user, from_attributes=True)
 
         # Create AuthResponse by adding access_token
-        return AuthResponse(
-            **user_data.model_dump(),
-            access_token=token_or_error
-        )
+        return AuthResponse(**user_data.model_dump(), access_token=token_or_error)
 
     except HTTPException:
-        # Re-raise HTTP exceptions as-is
+        # Re-raise HTTP exceptions as-is (including device trust errors)
         raise
 
     except Exception as e:
@@ -727,7 +839,7 @@ async def get_user(
     user_service = UserService(db)
     try:
         user = await user_service.get_user_by_id(user_id)
-
+        print(f"User Found {user}")
         if not user:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND, detail="User not found"
@@ -778,12 +890,7 @@ async def delete_user(
 
     user_service = UserService(db)
     try:
-        success = await user_service.delete_user(user_id)
-
-        if not success:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail="User not found"
-            )
+        await user_service.delete_user(user_id)
 
         logger.log_security_event(
             {

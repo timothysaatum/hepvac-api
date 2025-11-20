@@ -66,8 +66,8 @@ async def create_pregnant_patient(
             }
         )
 
-        return PregnantPatientResponseSchema.model_validate(
-            patient, from_attributes=True
+        return PregnantPatientResponseSchema.from_patient(
+            patient
         )
 
     except HTTPException:
@@ -123,8 +123,8 @@ async def get_pregnant_patient(
     service = PatientService(db)
     try:
         patient = await service.get_pregnant_patient(patient_id)
-        return PregnantPatientResponseSchema.model_validate(
-            patient, from_attributes=True
+        return PregnantPatientResponseSchema.from_patient(
+            patient
         )
 
     except HTTPException:
@@ -180,8 +180,8 @@ async def update_pregnant_patient(
             }
         )
 
-        return PregnantPatientResponseSchema.model_validate(
-            patient, from_attributes=True
+        return PregnantPatientResponseSchema.from_patient(
+            patient
         )
 
     except HTTPException:
@@ -230,7 +230,8 @@ async def convert_to_regular_patient(
     """
     service = PatientService(db)
     try:
-        patient = await service.convert_to_regular_patient(patient_id, conversion_data)
+        user_id = current_user.id
+        patient = await service.convert_to_regular_patient(user_id, patient_id, conversion_data)
 
         logger.log_info(
             {
@@ -241,8 +242,8 @@ async def convert_to_regular_patient(
             }
         )
 
-        return RegularPatientResponseSchema.model_validate(
-            patient, from_attributes=True
+        return RegularPatientResponseSchema.from_patient(
+            patient
         )
 
     except HTTPException:
@@ -303,8 +304,8 @@ async def create_regular_patient(
             }
         )
 
-        return RegularPatientResponseSchema.model_validate(
-            patient, from_attributes=True
+        return RegularPatientResponseSchema.from_patient(
+            patient
         )
 
     except HTTPException:
@@ -360,9 +361,7 @@ async def get_regular_patient(
     service = PatientService(db)
     try:
         patient = await service.get_regular_patient(patient_id)
-        return RegularPatientResponseSchema.model_validate(
-            patient, from_attributes=True
-        )
+        return PregnantPatientResponseSchema.from_patient(patient)
 
     except HTTPException:
         raise
@@ -416,8 +415,8 @@ async def update_regular_patient(
             }
         )
 
-        return RegularPatientResponseSchema.model_validate(
-            patient, from_attributes=True
+        return RegularPatientResponseSchema.from_patient(
+            patient
         )
 
     except HTTPException:
@@ -497,14 +496,12 @@ async def list_patients(
         for patient in patients:
             if patient.patient_type == "pregnant":
                 validated_items.append(
-                    PregnantPatientResponseSchema.model_validate(
-                        patient, from_attributes=True
-                    )
+                    PregnantPatientResponseSchema.from_patient(patient)
                 )
             else:
                 validated_items.append(
-                    RegularPatientResponseSchema.model_validate(
-                        patient, from_attributes=True
+                    RegularPatientResponseSchema.from_patient(
+                        patient
                     )
                 )
 

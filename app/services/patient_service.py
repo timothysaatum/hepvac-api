@@ -1,5 +1,4 @@
 from datetime import timedelta
-from decimal import Decimal
 from typing import List, Optional
 import uuid
 from fastapi import HTTPException, status
@@ -8,10 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.patient_model import (
     PregnantPatient,
     RegularPatient,
-    Vaccination,
     Child,
-    PatientWallet,
-    Payment,
     Prescription,
     MedicationSchedule,
     PatientReminder,
@@ -21,13 +17,8 @@ from app.schemas.patient_schemas import (
     PregnantPatientUpdateSchema,
     RegularPatientCreateSchema,
     RegularPatientUpdateSchema,
-    VaccinationCreateSchema,
-    VaccinationUpdateSchema,
     ChildCreateSchema,
     ChildUpdateSchema,
-    PatientWalletCreateSchema,
-    PatientWalletUpdateSchema,
-    PaymentCreateSchema,
     PrescriptionCreateSchema,
     PrescriptionUpdateSchema,
     MedicationScheduleCreateSchema,
@@ -109,7 +100,7 @@ class PatientService:
         return await self.repo.update_pregnant_patient(updated_by_id, patient)
 
     async def convert_to_regular_patient(
-        self, patient_id: uuid.UUID, conversion_data: ConvertToRegularPatientSchema
+        self, user_id: uuid.UUID, patient_id: uuid.UUID, conversion_data: ConvertToRegularPatientSchema
     ) -> RegularPatient:
         """Convert pregnant patient to regular patient after delivery."""
         pregnant_patient = await self.repo.get_pregnant_patient_by_id(patient_id)
@@ -148,7 +139,8 @@ class PatientService:
         # Update pregnant patient status
         pregnant_patient.status = PatientStatus.POSTPARTUM
         pregnant_patient.actual_delivery_date = conversion_data.actual_delivery_date
-        await self.repo.update_pregnant_patient(pregnant_patient)
+        # await self.repo.update_pregnant_patient(pregnant_patient)
+        await self.repo.update_pregnant_patient(user_id, pregnant_patient)
 
         return created_patient
 
@@ -300,78 +292,6 @@ class PatientService:
         await self.repo.delete_patient(patient)
         return True
 
-    # ============= Vaccination Services =============
-    async def create_vaccination(
-        self, vaccination_data: VaccinationCreateSchema
-    ) -> Vaccination:
-        """Create a new vaccination record."""
-        # Verify patient exists
-        patient_id = vaccination_data.patient_id
-        patient = await self.repo.get_patient_by_id(patient_id)
-        wallet = await self.get_patient_wallet(patient_id)
-        if not patient:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail="Patient not found"
-            )
-
-        if not wallet.payment_status.COMPLETED:
-            raise HTTPException(
-                status_code=status.HTTP_402_PAYMENT_REQUIRED, detail="Patient hasn't completed payment for this dose"
-            )
-
-        # Check if dose already exists
-        existing_vaccinations = await self.repo.get_patient_vaccinations(
-            vaccination_data.patient_id
-        )
-        for vac in existing_vaccinations:
-            if vac.dose_number == vaccination_data.dose_number:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"Dose {vaccination_data.dose_number} already administered",
-                )
-
-        vaccination_dict = vaccination_data.model_dump()
-        vaccination = Vaccination(**vaccination_dict)
-        return await self.repo.create_vaccination(vaccination)
-
-    async def get_vaccination(self, vaccination_id: uuid.UUID) -> Vaccination:
-        """Get vaccination by ID."""
-        vaccination = await self.repo.get_vaccination_by_id(vaccination_id)
-        if not vaccination:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Vaccination record not found",
-            )
-        return vaccination
-
-    async def update_vaccination(
-        self, vaccination_id: uuid.UUID, update_data: VaccinationUpdateSchema
-    ) -> Vaccination:
-        """Update vaccination record."""
-        vaccination = await self.repo.get_vaccination_by_id(vaccination_id)
-        if not vaccination:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Vaccination record not found",
-            )
-
-        update_dict = update_data.model_dump(exclude_unset=True)
-        for field, value in update_dict.items():
-            setattr(vaccination, field, value)
-
-        return await self.repo.update_vaccination(vaccination)
-
-    async def list_patient_vaccinations(
-        self, patient_id: uuid.UUID
-    ) -> List[Vaccination]:
-        """List all vaccinations for a patient."""
-        patient = await self.repo.get_patient_by_id(patient_id)
-        if not patient:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail="Patient not found"
-            )
-        return await self.repo.get_patient_vaccinations(patient_id)
-
     # ============= Child Services =============
     async def create_child(self, child_data: ChildCreateSchema) -> Child:
         """Create a new child record."""
@@ -427,92 +347,6 @@ class PatientService:
                 status_code=status.HTTP_404_NOT_FOUND, detail="Mother not found"
             )
         return await self.repo.get_mother_children(mother_id)
-
-    # ============= Wallet Services =============
-    async def create_wallet(
-        self, wallet_data: PatientWalletCreateSchema
-    ) -> PatientWallet:
-        """Create a new patient wallet."""
-        # Verify patient exists
-        patient = await self.repo.get_patient_by_id(wallet_data.patient_id)
-        if not patient:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail="Patient not found"
-            )
-
-        # Check if wallet already exists
-        existing_wallet = await self.repo.get_wallet_by_patient_id(
-            wallet_data.patient_id
-        )
-        if existing_wallet:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Wallet already exists for this patient",
-            )
-
-        wallet_dict = wallet_data.model_dump()
-        wallet_dict["amount_paid"] = Decimal("0.00")
-        wallet = PatientWallet(**wallet_dict)
-        return await self.repo.create_wallet(wallet)
-
-    async def get_patient_wallet(self, patient_id: uuid.UUID) -> PatientWallet:
-        """Get wallet by patient ID."""
-        wallet = await self.repo.get_wallet_by_patient_id(patient_id)
-        if not wallet:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Wallet not found for this patient",
-            )
-        return wallet
-
-    async def update_wallet(
-        self, wallet_id: uuid.UUID, update_data: PatientWalletUpdateSchema
-    ) -> PatientWallet:
-        """Update wallet."""
-        wallet = await self.repo.get_wallet_by_id(wallet_id)
-        if not wallet:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail="Wallet not found"
-            )
-
-        update_dict = update_data.model_dump(exclude_unset=True)
-        for field, value in update_dict.items():
-            setattr(wallet, field, value)
-
-        return await self.repo.update_wallet(wallet)
-
-    # ============= Payment Services =============
-    async def create_payment(self, payment_data: PaymentCreateSchema) -> Payment:
-        """Create a new payment and update wallet."""
-        wallet = await self.repo.get_wallet_by_id(payment_data.wallet_id)
-        if not wallet:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail="Wallet not found"
-            )
-        if payment_data.amount > wallet.total_amount:
-            raise HTTPException(
-                status_code=status.HTTP_406_NOT_ACCEPTABLE,
-                detail="Amount paid is more than total amount in patient wallet"
-            )
-        # Create payment
-        payment_dict = payment_data.model_dump()
-        payment = Payment(**payment_dict)
-        created_payment = await self.repo.create_payment(payment)
-
-        # Update wallet
-        wallet.amount_paid += created_payment.amount
-        await self.repo.update_wallet(wallet)
-
-        return created_payment
-
-    async def list_wallet_payments(self, wallet_id: uuid.UUID) -> List[Payment]:
-        """List all payments for a wallet."""
-        wallet = await self.repo.get_wallet_by_id(wallet_id)
-        if not wallet:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail="Wallet not found"
-            )
-        return await self.repo.get_wallet_payments(wallet_id)
 
     # ============= Prescription Services =============
     async def create_prescription(

@@ -19,14 +19,14 @@ from app.db.base import Base
 from app.schemas.patient_schemas import (
     DoseType,
     PatientStatus,
-    PaymentStatus,
     ReminderStatus,
     ReminderType,
     Sex,
     PatientType,
 )
 
-from app.models.vaccine_model import Vaccine
+
+from app.models.vaccine_model import PatientVaccinePurchase
 if TYPE_CHECKING:
     from app.models.user_model import User
     from app.models.facility_model import Facility
@@ -122,22 +122,23 @@ class Patient(Base):
         "User", foreign_keys=[updated_by_id], lazy="selectin"
     )
 
+    # Vaccine purchases replace wallet
+    vaccine_purchases: Mapped[List["PatientVaccinePurchase"]] = relationship(
+        "PatientVaccinePurchase", back_populates="patient", cascade="all, delete-orphan"
+    )
+
     vaccinations: Mapped[List["Vaccination"]] = relationship(
         "Vaccination", back_populates="patient", cascade="all, delete-orphan"
-    )
-    wallet: Mapped[Optional["PatientWallet"]] = relationship(
-        "PatientWallet",
-        back_populates="patient",
-        uselist=False,
-        cascade="all, delete-orphan",
     )
 
     prescriptions: Mapped[List["Prescription"]] = relationship(
         "Prescription", back_populates="patient", cascade="all, delete-orphan"
     )
+
     diagnosis: Mapped[List["Diagnosis"]] = relationship(
         "Diagnosis", back_populates="patient", cascade="all, delete-orphan"
     )
+
     medication_schedules: Mapped[List["MedicationSchedule"]] = relationship(
         "MedicationSchedule", back_populates="patient", cascade="all, delete-orphan"
     )
@@ -153,6 +154,7 @@ class Patient(Base):
 class Diagnosis(Base):
 
     __tablename__ = "diagnosis"
+
     id: Mapped[uuid.UUID] = mapped_column(
         PGUUID(as_uuid=True),
         primary_key=True,
@@ -160,42 +162,44 @@ class Diagnosis(Base):
         unique=True,
         index=True,
     )
-    history: Mapped[Optional[str]] = mapped_column(
-        Text, nullable=True
-    )
-    preliminary_diagnosis: Mapped[Optional[str]] = mapped_column(
-        Text, nullable=True
-    )
-    actual_diagnosis: Mapped[Optional[str]] = mapped_column(
-        Text, nullable=True
-    )
+    history: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    preliminary_diagnosis: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    actual_diagnosis: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
     diagnose_by_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         PGUUID(as_uuid=True),
         ForeignKey("users.id", ondelete="SET NULL"),
         nullable=True,
     )
+
     patient_id: Mapped[uuid.UUID] = mapped_column(
         PGUUID(as_uuid=True),
         ForeignKey("patients.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
+
     patient: Mapped["Patient"] = relationship("Patient", back_populates="diagnosis")
+
     diagnose_by: Mapped[Optional["User"]] = relationship(
         "User", foreign_keys=[diagnose_by_id], lazy="selectin"
     )
+
     is_deleted: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+
     diagnosed_on: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True),
         server_default=func.now(),
         nullable=False,
     )
+
     updated_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True),
         server_default=func.now(),
         onupdate=func.now(),
         nullable=False,
     )
+
     deleted_at: Mapped[Optional[datetime]] = mapped_column(
         TIMESTAMP(timezone=True), nullable=True
     )
@@ -247,7 +251,7 @@ class PregnantPatient(Patient):
 
     def __repr__(self) -> str:
         return self.name
-    
+
     def has_delivered(self) -> bool:
         if self.actual_delivery_date is not None:
             return True
@@ -307,17 +311,11 @@ class Vaccination(Base):
         index=True,
     )
 
-    vaccine_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+    # Link to the vaccine purchase (replaces wallet_id)
+    vaccine_purchase_id: Mapped[uuid.UUID] = mapped_column(
         PGUUID(as_uuid=True),
-        ForeignKey("vaccines.id", ondelete="SET NULL"),
-        nullable=True,
-        index=True,
-    )
-
-    wallet_id: Mapped[Optional[uuid.UUID]] = mapped_column(
-        PGUUID(as_uuid=True),
-        ForeignKey("patient_wallets.id", ondelete="SET NULL"),
-        nullable=True,
+        ForeignKey("patient_vaccine_purchases.id", ondelete="CASCADE"),
+        nullable=False,
         index=True,
     )
 
@@ -328,10 +326,9 @@ class Vaccination(Base):
     dose_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
     batch_number: Mapped[str] = mapped_column(String(100), nullable=False)
 
-    vaccine_name: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
-    vaccine_price: Mapped[Optional[Decimal]] = mapped_column(
-        Numeric(10, 2), nullable=True
-    )
+    # Snapshot of vaccine info at time of administration
+    vaccine_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    vaccine_price: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
 
     # Additional Information
     administered_by_id: Mapped[Optional[uuid.UUID]] = mapped_column(
@@ -348,14 +345,12 @@ class Vaccination(Base):
     )
 
     # Relationships
-    patient: Mapped["Patient"] = relationship("Patient", back_populates="vaccinations")
-
-    vaccine: Mapped[Optional["Vaccine"]] = relationship(
-        "Vaccine", foreign_keys=[vaccine_id], lazy="selectin"
+    patient: Mapped["Patient"] = relationship(
+        "Patient", back_populates="vaccinations", foreign_keys=[patient_id]
     )
 
-    wallet: Mapped[Optional["PatientWallet"]] = relationship(
-        "PatientWallet", foreign_keys=[wallet_id], lazy="selectin"
+    vaccine_purchase: Mapped["PatientVaccinePurchase"] = relationship(
+        "PatientVaccinePurchase", back_populates="vaccinations", lazy="selectin"
     )
 
     administered_by: Mapped[Optional["User"]] = relationship(
@@ -424,115 +419,8 @@ class Child(Base):
         return f"<Child id={self.id} mother_id={self.mother_id}>"
 
 
-class PatientWallet(Base):
-    """Patient wallet for installment payments"""
-
-    __tablename__ = "patient_wallets"
-
-    id: Mapped[uuid.UUID] = mapped_column(
-        PGUUID(as_uuid=True),
-        primary_key=True,
-        default=uuid.uuid4,
-        unique=True,
-        index=True,
-    )
-
-    patient_id: Mapped[uuid.UUID] = mapped_column(
-        PGUUID(as_uuid=True),
-        ForeignKey("patients.id", ondelete="CASCADE"),
-        nullable=False,
-        unique=True,
-        index=True,
-    )
-
-    # Financial Information
-    total_amount: Mapped[Decimal] = mapped_column(
-        Numeric(10, 2), default=Decimal("0.00"), nullable=False
-    )
-    amount_paid: Mapped[Decimal] = mapped_column(
-        Numeric(10, 2), default=Decimal("0.00"), nullable=False
-    )
-    balance: Mapped[Decimal] = mapped_column(
-        Numeric(10, 2), default=Decimal("0.00"), nullable=False
-    )
-    payment_status: Mapped[PaymentStatus] = mapped_column(
-        SQLEnum(PaymentStatus),
-        default=PaymentStatus.PENDING,
-        nullable=False,
-        index=True,
-    )
-
-    created_at: Mapped[datetime] = mapped_column(
-        TIMESTAMP(timezone=True),
-        server_default=func.now(),
-        nullable=False,
-    )
-
-    updated_at: Mapped[datetime] = mapped_column(
-        TIMESTAMP(timezone=True),
-        server_default=func.now(),
-        onupdate=func.now(),
-        nullable=False,
-    )
-
-    # Relationships
-    patient: Mapped["Patient"] = relationship(
-        "Patient", back_populates="wallet", foreign_keys=[patient_id]
-    )
-
-    payments: Mapped[List["Payment"]] = relationship(
-        "Payment", back_populates="wallet", cascade="all, delete-orphan"
-    )
-    vaccinations: Mapped[List["Vaccination"]] = relationship(
-        "Vaccination", back_populates="wallet", foreign_keys="[Vaccination.wallet_id]"
-    )
-
-    def get_total_doses_paid(self) -> int:
-        """Calculate how many doses have been paid for"""
-        from decimal import Decimal
-
-        if self.total_amount <= 0:
-            return 0
-        # Assuming each dose costs the same
-        dose_price = self.total_amount / 3  # Example: 3 doses total
-        doses_paid = int(self.amount_paid / dose_price)
-        return doses_paid
-
-    def get_doses_administered(self) -> int:
-        """Get number of doses already administered"""
-        return len(self.vaccinations)
-
-    def can_administer_next_dose(self) -> tuple[bool, str]:
-        """Check if next dose can be administered"""
-        doses_paid = self.get_total_doses_paid()
-        doses_given = self.get_doses_administered()
-
-        if doses_given >= doses_paid:
-            return (
-                False,
-                f"Payment required. {doses_paid} dose(s) paid, {doses_given} already given.",
-            )
-
-        return True, f"Can administer. {doses_paid - doses_given} dose(s) remaining."
-
-    def update_balance(self) -> None:
-        """Update balance based on total and paid amounts"""
-        self.balance = self.total_amount - self.amount_paid
-
-        # Update payment status
-        if self.balance <= 0:
-            self.payment_status = PaymentStatus.COMPLETED
-        elif self.amount_paid > 0:
-            self.payment_status = PaymentStatus.PARTIAL
-        else:
-            self.payment_status = PaymentStatus.PENDING
-
-    def __repr__(self) -> str:
-        return f"<PatientWallet id={self.id} patient_id={self.patient_id} balance={self.balance}>"
-
-
 class Payment(Base):
-    """Individual payment transactions"""
+    """Individual installment payment transactions"""
 
     __tablename__ = "payments"
 
@@ -544,9 +432,10 @@ class Payment(Base):
         index=True,
     )
 
-    wallet_id: Mapped[uuid.UUID] = mapped_column(
+    # Link to vaccine purchase (replaces wallet_id)
+    vaccine_purchase_id: Mapped[uuid.UUID] = mapped_column(
         PGUUID(as_uuid=True),
-        ForeignKey("patient_wallets.id", ondelete="CASCADE"),
+        ForeignKey("patient_vaccine_purchases.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
@@ -557,7 +446,6 @@ class Payment(Base):
     reference_number: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
-    # Tracking
     received_by_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         PGUUID(as_uuid=True),
         ForeignKey("users.id", ondelete="SET NULL"),
@@ -571,8 +459,8 @@ class Payment(Base):
     )
 
     # Relationships
-    wallet: Mapped["PatientWallet"] = relationship(
-        "PatientWallet", back_populates="payments", foreign_keys=[wallet_id]
+    vaccine_purchase: Mapped["PatientVaccinePurchase"] = relationship(
+        "PatientVaccinePurchase", back_populates="payments", lazy="selectin"
     )
 
     received_by: Mapped[Optional["User"]] = relationship(
@@ -668,17 +556,14 @@ class MedicationSchedule(Base):
 
     medication_name: Mapped[str] = mapped_column(String(255), nullable=False)
     scheduled_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
-
     # Purchase and dispensing tracking
     quantity_purchased: Mapped[Optional[int]] = mapped_column(nullable=True)
     months_supply: Mapped[Optional[int]] = mapped_column(nullable=True)
     next_dose_due_date: Mapped[Optional[date]] = mapped_column(
         Date, nullable=True, index=True
     )
-
     is_completed: Mapped[bool] = mapped_column(default=False, nullable=False)
     completed_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
-
     # Lab review tracking (after 6 months)
     lab_review_scheduled: Mapped[bool] = mapped_column(default=False, nullable=False)
     lab_review_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
