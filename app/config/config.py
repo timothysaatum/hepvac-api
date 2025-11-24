@@ -27,7 +27,7 @@ class Settings(BaseSettings):
     # super admin credentials
     SUPER_ADMIN_USER_NAME: str
     SUPER_ADMIN_PASSWORD_HASH: str
-
+    SUPER_ADMIN_TOKEN_EXPIRE_MINUTES: int
     # Notification config
 
     # email

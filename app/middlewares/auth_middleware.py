@@ -133,6 +133,7 @@ async def authenticate_user(
 def set_refresh_token_cookie(
     response: Response,
     refresh_token: str,
+    key: Optional[str] = None,
     request: Request = None,
 ) -> None:
     """
@@ -155,7 +156,7 @@ def set_refresh_token_cookie(
 
     # Set cookie with appropriate security settings
     response.set_cookie(
-        key="refresh_token",
+        key=key or "refresh_token",
         value=refresh_token,
         httponly=True,
         secure=is_secure,  # Use secure flag if HTTPS

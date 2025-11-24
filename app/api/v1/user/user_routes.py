@@ -1,22 +1,30 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import traceback
 import uuid
-from app.core.pagination import PaginatedResponse, PaginationParams, Paginator, get_pagination_params
+from app.core.pagination import (
+    PaginatedResponse,
+    PaginationParams,
+    Paginator,
+    get_pagination_params,
+)
 from app.core.permission_checker import require_admin
 from sqlalchemy.orm import selectinload
 from sqlalchemy import select
-from app.core.security import get_current_user
+from app.core.security import get_current_user, super_admin_login
 from app.core.sessions import SessionManager, TokenManager
+from app.middlewares.auth_middleware import set_refresh_token_cookie
 from app.middlewares.security_middleware import DeviceTrustService
 from app.models.rbac import Role
 from app.models.user_model import User
 from app.schemas.user_schemas import (
-    UserCreateSchema, 
-    UserLoginSchema, 
+    SuperAdminAuthResponse,
+    UserCreateSchema,
+    UserLoginSchema,
     UserSchema,
     AuthResponse,
-    UserUpdateSchema
-    )
+    UserUpdateSchema,
+)
+from app.config.config import settings
 from app.services.user_service import UserService
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -83,93 +91,6 @@ async def create_user(
         )
 
 
-# @router.post("/login", response_model=AuthResponse)
-# async def login_user(
-#     login_data: UserLoginSchema,
-#     request: Request,
-#     response: Response,
-#     db: AsyncSession = Depends(get_db),
-# ):
-#     """
-#     Authenticate user and create session.
-
-#     Args:
-#         login_data: Login credentials
-#         request: FastAPI request object
-#         response: FastAPI response object
-#         db: Database session
-
-#     Returns:
-#         AuthResponse: Authenticated user information with access token
-
-#     Raises:
-#         HTTPException: If authentication fails
-#     """
-#     user_service = UserService(db)
-#     device_data = SessionManager.extract_device_info(request)
-#     user_agent = device_data["user_agent"]
-#     ip_address = device_data["client_ip"]
-#     try:
-#         success, user, token_or_error = await user_service.login_user(
-#             username=login_data.username,
-#             password=login_data.password,
-#             ip_address=ip_address,
-#             request=request,
-#             response=response,
-#             user_agent=user_agent
-#         )
-
-#         if not success or not user:
-#             logger.log_warning(
-#                 {
-#                     "event": "login_failed",
-#                     "username": login_data.username,
-#                     "ip_address": ip_address,
-#                     "reason": token_or_error,
-#                 }
-#             )
-#             raise HTTPException(
-#                 status_code=status.HTTP_401_UNAUTHORIZED,
-#                 detail=token_or_error or "Invalid credentials",
-#             )
-
-#         logger.log_info(
-#             {
-#                 "event": "login_success",
-#                 "username": login_data.username,
-#                 "ip_address": ip_address,
-#                 "user_id": str(user.id),
-#             }
-#         )
-
-#         # Validate user to UserSchema
-#         user_data = UserSchema.model_validate(user, from_attributes=True)
-
-#         # Create AuthResponse by adding access_token
-#         return AuthResponse(
-#             **user_data.model_dump(),
-#             access_token=token_or_error
-#         )
-
-#     except HTTPException:
-#         # Re-raise HTTP exceptions as-is
-#         raise
-
-#     except Exception as e:
-#         # Log unexpected errors
-#         logger.log_error(
-#             {
-#                 "event": "login_error",
-#                 "username": login_data.username,
-#                 "ip_address": ip_address,
-#                 "error": str(e),
-#                 "error_type": type(e).__name__,
-#             }
-#         )
-#         raise HTTPException(
-#             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-#             detail="An unexpected error occurred during login",
-#         )
 @router.post("/login", response_model=AuthResponse)
 async def login_user(
     login_data: UserLoginSchema,
@@ -222,37 +143,44 @@ async def login_user(
                 detail=token_or_error or "Invalid credentials",
             )
 
-        # Step 2: Check device trust AFTER successful authentication
-        try:
-            is_trusted, message, is_new = (
-                await DeviceTrustService.check_and_register_device(
-                    request=request, user_id=user.id, db=db
-                )
-            )
-        except HTTPException as device_error:
-            # Device not trusted - log the blocked attempt
-            logger.log_warning(
-                {
-                    "event": "device_trust_blocked",
-                    "username": login_data.username,
-                    "user_id": str(user.id),
-                    "ip_address": ip_address,
-                    "user_agent": user_agent,
-                    "reason": device_error.detail,
-                }
-            )
-            # Re-raise the device trust error to block login
-            raise device_error
+        # Initialize device trust variables
+        is_new = False
+        device_checked = False
 
-        # Step 3: Device is trusted, proceed with login
+        # Step 2: Check device trust AFTER successful authentication (skip for admins)
+        if not user.has_role("admin"):
+            try:
+                is_trusted, message, is_new = (
+                    await DeviceTrustService.check_and_register_device(
+                        request=request, user_id=user.id, db=db
+                    )
+                )
+                device_checked = True
+            except HTTPException as device_error:
+                # Device not trusted - log the blocked attempt
+                logger.log_warning(
+                    {
+                        "event": "device_trust_blocked",
+                        "username": login_data.username,
+                        "user_id": str(user.id),
+                        "ip_address": ip_address,
+                        "user_agent": user_agent,
+                        "reason": device_error.detail,
+                    }
+                )
+                # Re-raise the device trust error to block login
+                raise device_error
+
+        # Step 3: Device is trusted (or admin), proceed with login
         logger.log_info(
             {
                 "event": "login_success",
                 "username": login_data.username,
                 "ip_address": ip_address,
                 "user_id": str(user.id),
-                "device_trusted": True,
+                "device_checked": device_checked,
                 "new_device": is_new,
+                "is_admin": user.has_role("admin"),
             }
         )
 
@@ -281,6 +209,91 @@ async def login_user(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred during login",
         )
+
+
+@router.post("/superadmin-login", response_model=SuperAdminAuthResponse)
+async def authenticate_superadmin(
+    login_data: UserLoginSchema,
+    request: Request,
+    response: Response,
+):
+    """
+    Authenticate super admin and provide access token.
+
+    Args:
+        login_data: Login credentials
+        request: FastAPI request object
+    Returns:
+        SuperAdminAuthResponse: Access token for super admin
+    Raises:
+        HTTPException: If authentication fails
+    """
+    # Validate super admin credentials
+    success = await super_admin_login(login_data, request)
+    # Create access token for super admin
+    if not success:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid super admin credentials",
+        )
+    access_token = TokenManager.create_access_token(
+        data={"sub": login_data.username, "type": "superadmin"},
+        expires_delta=timedelta(minutes=settings.SUPER_ADMIN_TOKEN_EXPIRE_MINUTES),
+    )
+    refresh_token = TokenManager.create_refresh_token(login_data.username)
+
+    set_refresh_token_cookie(
+        key="superadmin_refresh_token",
+        response=response,
+        refresh_token=refresh_token,
+        request=request,
+    )
+
+    return SuperAdminAuthResponse(
+        username=login_data.username, access_token=access_token
+    )
+
+
+@router.post("/superadmin-refresh", response_model=SuperAdminAuthResponse)
+async def refresh_superadmin_token(
+    request: Request,
+):
+    """
+    Refresh super admin access token.
+
+    Args:
+        request: FastAPI request object
+    Returns:
+        SuperAdminAuthResponse: New access token for super admin
+    Raises:
+        HTTPException: If refresh fails
+    """
+    # Extract current token from Authorization header
+    refresh_token = request.cookies.get("superadmin_refresh_token")
+    if not refresh_token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="No authorization token provided",
+        )
+    token = refresh_token
+
+    # Decode and validate the current token
+    payload = TokenManager.decode_token(token)
+    if payload.get("sub") != "superadmin":
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid super admin token",
+        )
+
+    username = payload.get("sub")
+
+    # Create new access token
+    new_access_token = TokenManager.create_access_token(
+        data={"sub": username, "type": "superadmin"},
+        expires_delta=timedelta(minutes=settings.SUPER_ADMIN_TOKEN_EXPIRE_MINUTES),
+    )
+
+    return SuperAdminAuthResponse(username=username, access_token=new_access_token)
 
 
 @router.post("/refresh", response_model=AuthResponse)
@@ -421,7 +434,6 @@ async def refresh_token(
             refresh_token_record.device_info = device_info_str
 
         await db.commit()
-
 
         logger.log_security_event(
             {
@@ -574,7 +586,6 @@ async def logout(
             samesite="none",
         )
 
-
         logger.log_security_event(
             {
                 "event_type": "logout_success",
@@ -641,7 +652,22 @@ async def create_staff_user(
     try:
 
         user_data.roles = ["staff"]
-        user = await user_service.create_user(user_data)
+        if not current_user.has_role("admin"):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only admins can create staff users",
+            )
+        if not current_user.is_active or current_user.is_suspended:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Your account is not active or is suspended",
+            )
+        if not current_user.facility_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="You must be assigned to a facility to create staff users",
+            )   
+        user = await user_service.create_user(user_data, facility_id=current_user.facility_id)
         return UserSchema.model_validate(user, from_attributes=True)
 
     except ValueError as e:

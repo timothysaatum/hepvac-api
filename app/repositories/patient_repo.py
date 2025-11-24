@@ -90,7 +90,6 @@ class PatientRepository:
             select(PregnantPatient)
             .options(selectinload(PregnantPatient.children))
             .options(selectinload(PregnantPatient.vaccinations))
-            .options(selectinload(PregnantPatient.wallet))
             .where(
                 PregnantPatient.id == patient_id,
                 PregnantPatient.is_deleted == False,
@@ -124,7 +123,6 @@ class PatientRepository:
             select(RegularPatient)
             .options(selectinload(RegularPatient.prescriptions))
             .options(selectinload(RegularPatient.medication_schedules))
-            .options(selectinload(RegularPatient.wallet))
             .where(
                 RegularPatient.id == patient_id,
                 RegularPatient.is_deleted == False,

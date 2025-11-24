@@ -59,7 +59,10 @@ class SecurityRepository:
         )
 
         if facility_id:
-            query = query.join(User).where(User.facility_id == facility_id)
+            # Explicitly specify the join condition to avoid ambiguity
+            query = query.join(
+                User, TrustedDevice.user_id == User.id  # Specify which FK to use
+            ).where(User.facility_id == facility_id)
 
         query = query.order_by(TrustedDevice.first_seen.desc())
 

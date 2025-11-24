@@ -272,3 +272,9 @@ class UserLoginSchema(BaseModel):
 
 class AuthResponse(UserSchema):
     access_token: str
+
+
+class SuperAdminAuthResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    username: str

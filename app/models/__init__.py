@@ -26,3 +26,4 @@ from app.middlewares.device_trust import (
     LoginAttempt,
     GeographicRestriction,
 )
+from app.core.settings import Setting

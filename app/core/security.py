@@ -14,6 +14,8 @@ from app.models.user_model import User
 from app.config.config import settings
 from sqlalchemy.orm import selectinload
 
+from app.schemas.user_schemas import UserLoginSchema
+
 
 MAX_LOGIN_ATTEMPTS = settings.MAX_LOGIN_ATTEMPTS
 LOCKOUT_DURATION_MINUTES = settings.LOGIN_ATTEMPT_WINDOW_MINUTES
@@ -261,6 +263,71 @@ async def get_current_user(
 
     except (JWTError, ValueError) as e:
         logger.log_warning({"event_type": "invalid_auth_credentials", "error": str(e)})
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid authentication credentials",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+async def super_admin_login(login_data: UserLoginSchema, request: Request):
+    """Log super admin login attempts for security auditing."""
+    user_name = settings.SUPER_ADMIN_USER_NAME
+    password_hash = get_password_hash(settings.SUPER_ADMIN_PASSWORD_HASH)
+    
+    login_password = login_data.password
+
+    if login_data.username != user_name or not verify_password(login_password, password_hash):
+        logger.log_security_event(
+            {
+                "event_type": "super_admin_failed_login",
+                "username_attempted": login_data.username,
+                "ip_address": request.client.host if request.client else None,
+                "user_agent": request.headers.get("User-Agent") if request else None,
+            }
+        )
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid super admin credentials",
+        )
+    logger.log_security_event(
+        {
+            "event_type": "super_admin_successful_login",
+            "username": login_data.username,
+            "ip_address": request.client.host if request.client else None,
+            "user_agent": request.headers.get("User-Agent") if request else None,
+        }
+    )
+    return True
+
+
+def require_super_admin(
+    credentials: HTTPAuthorizationCredentials = Security(security),
+    request: Request = None,
+) -> None:
+    """
+    Dependency to require super admin access.
+
+    Args:
+        credentials: HTTP Authorization credentials containing the Bearer token
+        request: FastAPI request object
+
+    Raises:
+        HTTPException: If the user is not a super admin
+    """
+    token = credentials.credentials  # Extract token from credentials
+
+    try:
+        payload = TokenManager.decode_token(token)
+
+        if payload.get("type") != "superadmin":
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid super admin token",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+
+    except (JWTError, ValueError) as e:
+        logger.log_warning({"event_type": "invalid_super_admin_credentials", "error": str(e)})
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid authentication credentials",

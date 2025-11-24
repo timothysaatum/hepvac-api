@@ -8,16 +8,21 @@ from app.middlewares.device_trust_schemas import DeviceApprovalSchema, TrustedDe
 from app.middlewares.device_trust_service import SecurityService
 from app.models.user_model import User
 from app.core.utils import logger
+from app.core.security import require_super_admin
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-router = APIRouter(prefix="/security", tags=["security"])
+router = APIRouter(
+    prefix="/security", 
+    tags=["security"]
+)
 
 
 @router.get("/devices/pending", response_model=List[TrustedDeviceResponse])
 async def get_pending_devices(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_admin()),
+    # super_admin=Depends(require_super_admin())
 ):
     """
     Get all devices pending approval (Admin only).

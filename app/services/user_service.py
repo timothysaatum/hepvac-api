@@ -17,7 +17,10 @@ class UserService:
         self.db = db
         self.repo = UserRepository(self.db)
 
-    async def create_user(self, user_data: UserCreateSchema) -> User:
+    async def create_user(
+            self, user_data: UserCreateSchema, 
+            facility_id: Optional[uuid.UUID] = None
+            ) -> User:
         """
         Create a new user from Pydantic schema.
 
@@ -45,6 +48,8 @@ class UserService:
 
         # Hash the password before storing
         user_dict["password"] = get_password_hash(user_data.password)
+        if facility_id:
+            user_dict["facility_id"] = facility_id
 
         db_user = User(**user_dict)
 
@@ -95,7 +100,6 @@ class UserService:
             ip_address=ip_address,
             user_agent=user_agent,
         )
-
         if not auth_success or not user:
             return False, user, error_message
 
