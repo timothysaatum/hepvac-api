@@ -233,6 +233,7 @@ class PregnantPatientResponseSchema(BaseModel):
     name: Optional[str] = None
     phone: Optional[str] = None
     age: Optional[int] = None
+    sex: Sex
     patient_type: str
     status: PatientStatus
     expected_delivery_date: Optional[date] = None
@@ -356,7 +357,7 @@ class RegularPatientResponseSchema(RegularPatientBaseSchema):
     id: uuid.UUID
     patient_type: str
     status: PatientStatus
-    facility_id: uuid.UUID
+    # facility_id: uuid.UUID
     created_by_id: Optional[uuid.UUID] = None
     updated_by_id: Optional[uuid.UUID] = None
     created_at: datetime

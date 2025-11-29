@@ -348,6 +348,7 @@ class PatientVaccinePurchaseResponseSchema(BaseModel):
     balance: Decimal
     payment_status: PaymentStatus
     doses_administered: int
+    batch_number: str
     purchase_date: datetime
     is_active: bool
     notes: Optional[str] = None

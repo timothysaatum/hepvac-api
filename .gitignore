@@ -6,7 +6,7 @@ __pycache__/
 *$py.class
 
 # Virtual environments
-.hepenv/
+hepenv/
 venv/
 ENV/
 env/

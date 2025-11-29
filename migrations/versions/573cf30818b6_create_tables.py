@@ -1,8 +1,8 @@
 """create tables
 
-Revision ID: fb4db73968c3
+Revision ID: 573cf30818b6
 Revises: 
-Create Date: 2025-11-21 07:13:46.350268
+Create Date: 2025-11-27 03:22:50.870224
 
 """
 from typing import Sequence, Union
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision: str = 'fb4db73968c3'
+revision: str = '573cf30818b6'
 down_revision: Union[str, Sequence[str], None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -48,6 +48,22 @@ def upgrade() -> None:
     sa.PrimaryKeyConstraint('id')
     )
     op.create_index(op.f('ix_roles_name'), 'roles', ['name'], unique=True)
+    op.create_table('settings',
+    sa.Column('id', sa.UUID(), nullable=False),
+    sa.Column('send_to_all_patients', sa.Boolean(), nullable=False),
+    sa.Column('send_to_only_pregant', sa.Boolean(), nullable=False),
+    sa.Column('send_to_only_mothers', sa.Boolean(), nullable=False),
+    sa.Column('send_to_only_regular', sa.Boolean(), nullable=False),
+    sa.Column('send_to_only_staff', sa.Boolean(), nullable=False),
+    sa.Column('set_reminder_interval', sa.Integer(), nullable=False),
+    sa.Column('set_refresh_rate', sa.Integer(), nullable=False),
+    sa.Column('suspend_system', sa.Boolean(), nullable=False),
+    sa.Column('on_maintance', sa.Boolean(), nullable=False),
+    sa.Column('lock_system', sa.Boolean(), nullable=False),
+    sa.Column('reminder_message', sa.Text(), nullable=True),
+    sa.PrimaryKeyConstraint('id')
+    )
+    op.create_index(op.f('ix_settings_id'), 'settings', ['id'], unique=True)
     op.create_table('users',
     sa.Column('id', sa.UUID(), nullable=False),
     sa.Column('username', sa.String(length=50), nullable=False),
@@ -519,6 +535,8 @@ def downgrade() -> None:
     op.drop_index(op.f('ix_users_id'), table_name='users')
     op.drop_index(op.f('ix_users_email'), table_name='users')
     op.drop_table('users')
+    op.drop_index(op.f('ix_settings_id'), table_name='settings')
+    op.drop_table('settings')
     op.drop_index(op.f('ix_roles_name'), table_name='roles')
     op.drop_table('roles')
     op.drop_index(op.f('ix_permissions_name'), table_name='permissions')
