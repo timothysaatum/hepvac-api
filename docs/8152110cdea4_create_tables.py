@@ -1,8 +1,8 @@
 """create tables
 
-Revision ID: 573cf30818b6
+Revision ID: 8152110cdea4
 Revises: 
-Create Date: 2025-11-27 03:22:50.870224
+Create Date: 2025-12-02 04:54:59.635671
 
 """
 from typing import Sequence, Union
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision: str = '573cf30818b6'
+revision: str = '8152110cdea4'
 down_revision: Union[str, Sequence[str], None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -48,22 +48,6 @@ def upgrade() -> None:
     sa.PrimaryKeyConstraint('id')
     )
     op.create_index(op.f('ix_roles_name'), 'roles', ['name'], unique=True)
-    op.create_table('settings',
-    sa.Column('id', sa.UUID(), nullable=False),
-    sa.Column('send_to_all_patients', sa.Boolean(), nullable=False),
-    sa.Column('send_to_only_pregant', sa.Boolean(), nullable=False),
-    sa.Column('send_to_only_mothers', sa.Boolean(), nullable=False),
-    sa.Column('send_to_only_regular', sa.Boolean(), nullable=False),
-    sa.Column('send_to_only_staff', sa.Boolean(), nullable=False),
-    sa.Column('set_reminder_interval', sa.Integer(), nullable=False),
-    sa.Column('set_refresh_rate', sa.Integer(), nullable=False),
-    sa.Column('suspend_system', sa.Boolean(), nullable=False),
-    sa.Column('on_maintance', sa.Boolean(), nullable=False),
-    sa.Column('lock_system', sa.Boolean(), nullable=False),
-    sa.Column('reminder_message', sa.Text(), nullable=True),
-    sa.PrimaryKeyConstraint('id')
-    )
-    op.create_index(op.f('ix_settings_id'), 'settings', ['id'], unique=True)
     op.create_table('users',
     sa.Column('id', sa.UUID(), nullable=False),
     sa.Column('username', sa.String(length=50), nullable=False),
@@ -177,6 +161,38 @@ def upgrade() -> None:
     sa.ForeignKeyConstraint(['role_id'], ['roles.id'], ),
     sa.PrimaryKeyConstraint('role_id', 'permission_id')
     )
+    op.create_table('settings',
+    sa.Column('id', sa.Integer(), nullable=False, comment='Fixed ID=1 for singleton pattern'),
+    sa.Column('notification_target', sa.String(length=50), nullable=False, comment='Target audience for notifications'),
+    sa.Column('reminder_interval_days', sa.Integer(), nullable=False, comment='Days between vaccination reminders (1-30)'),
+    sa.Column('reminder_message', sa.Text(), nullable=True, comment='Custom reminder message template'),
+    sa.Column('dashboard_refresh_rate_seconds', sa.Integer(), nullable=False, comment='Auto-refresh interval in seconds (10-300)'),
+    sa.Column('enable_dashboard_auto_refresh', sa.Boolean(), nullable=False, comment='Enable/disable dashboard auto-refresh'),
+    sa.Column('system_status', sa.String(length=20), nullable=False, comment='Current system operational status'),
+    sa.Column('maintenance_message', sa.Text(), nullable=True, comment='Message displayed during maintenance'),
+    sa.Column('maintenance_start', sa.DateTime(), nullable=True, comment='Scheduled maintenance start time'),
+    sa.Column('maintenance_end', sa.DateTime(), nullable=True, comment='Scheduled maintenance end time'),
+    sa.Column('require_device_approval', sa.Boolean(), nullable=False, comment='Require admin approval for new devices'),
+    sa.Column('session_timeout_minutes', sa.Integer(), nullable=False, comment='User session timeout in minutes (30-1440)'),
+    sa.Column('max_login_attempts', sa.Integer(), nullable=False, comment='Maximum failed login attempts before lockout (3-10)'),
+    sa.Column('lockout_duration_minutes', sa.Integer(), nullable=False, comment='Account lockout duration in minutes (10-120)'),
+    sa.Column('created_at', sa.DateTime(), nullable=False, comment='Settings creation timestamp'),
+    sa.Column('updated_at', sa.DateTime(), nullable=False, comment='Last update timestamp'),
+    sa.Column('updated_by_id', sa.UUID(), nullable=True, comment='User who last updated settings'),
+    sa.CheckConstraint('dashboard_refresh_rate_seconds >= 10 AND dashboard_refresh_rate_seconds <= 300', name='valid_refresh_rate'),
+    sa.CheckConstraint('id = 1', name='single_settings_row'),
+    sa.CheckConstraint('lockout_duration_minutes >= 10 AND lockout_duration_minutes <= 120', name='valid_lockout_duration'),
+    sa.CheckConstraint('max_login_attempts >= 3 AND max_login_attempts <= 10', name='valid_max_login_attempts'),
+    sa.CheckConstraint('reminder_interval_days >= 1 AND reminder_interval_days <= 30', name='valid_reminder_interval'),
+    sa.CheckConstraint('session_timeout_minutes >= 30 AND session_timeout_minutes <= 1440', name='valid_session_timeout'),
+    sa.ForeignKeyConstraint(['updated_by_id'], ['users.id'], ondelete='SET NULL'),
+    sa.PrimaryKeyConstraint('id')
+    )
+    op.create_index('idx_settings_status', 'settings', ['system_status'], unique=False)
+    op.create_index('idx_settings_updated', 'settings', ['updated_at'], unique=False)
+    op.create_index(op.f('ix_settings_notification_target'), 'settings', ['notification_target'], unique=False)
+    op.create_index(op.f('ix_settings_system_status'), 'settings', ['system_status'], unique=False)
+    op.create_index(op.f('ix_settings_updated_at'), 'settings', ['updated_at'], unique=False)
     op.create_table('trusted_devices',
     sa.Column('id', sa.UUID(), nullable=False),
     sa.Column('user_id', sa.UUID(), nullable=False),
@@ -507,6 +523,12 @@ def downgrade() -> None:
     op.drop_index(op.f('ix_trusted_devices_id'), table_name='trusted_devices')
     op.drop_index(op.f('ix_trusted_devices_device_fingerprint'), table_name='trusted_devices')
     op.drop_table('trusted_devices')
+    op.drop_index(op.f('ix_settings_updated_at'), table_name='settings')
+    op.drop_index(op.f('ix_settings_system_status'), table_name='settings')
+    op.drop_index(op.f('ix_settings_notification_target'), table_name='settings')
+    op.drop_index('idx_settings_updated', table_name='settings')
+    op.drop_index('idx_settings_status', table_name='settings')
+    op.drop_table('settings')
     op.drop_table('role_permissions')
     op.drop_index(op.f('ix_refresh_tokens_user_id'), table_name='refresh_tokens')
     op.drop_index(op.f('ix_refresh_tokens_id'), table_name='refresh_tokens')
@@ -535,8 +557,6 @@ def downgrade() -> None:
     op.drop_index(op.f('ix_users_id'), table_name='users')
     op.drop_index(op.f('ix_users_email'), table_name='users')
     op.drop_table('users')
-    op.drop_index(op.f('ix_settings_id'), table_name='settings')
-    op.drop_table('settings')
     op.drop_index(op.f('ix_roles_name'), table_name='roles')
     op.drop_table('roles')
     op.drop_index(op.f('ix_permissions_name'), table_name='permissions')

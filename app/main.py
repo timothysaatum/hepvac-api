@@ -10,6 +10,7 @@ from app.config.config import settings
 from app.db.session import engine, AsyncSessionLocal
 from app.api.v1 import router as api_router
 from app.core.rbac_init import initialize_rbac
+from app.middlewares.settings import get_system_status_for_config, initialize_settings, settings_middleware
 
 logger = logging.getLogger("uvicorn")
 
@@ -28,8 +29,17 @@ async def lifespan(app: FastAPI):
 
         logger.info("Database connection established successfully.")
 
+        # Initialize RBAC
         async with AsyncSessionLocal() as db:
             await initialize_rbac(db)
+        
+        logger.info("RBAC initialized successfully.")
+        
+        # Initialize Settings (NEW)
+        async with AsyncSessionLocal() as db:
+            await initialize_settings(db)
+        
+        logger.info("Settings initialized successfully.")
 
         logger.info(
             {
@@ -38,7 +48,8 @@ async def lifespan(app: FastAPI):
             }
         )
     except Exception as e:
-        logger.error(f"Database connection failed: {e}")
+        logger.error(f"Startup initialization failed: {e}")
+        logger.error("Application may not function correctly")
 
     yield
 
@@ -79,6 +90,12 @@ def create_app() -> FastAPI:
                 return RedirectResponse(str(request.url.replace(scheme="https")))
         return await call_next(request)
 
+    # ---------------------- SETTINGS MIDDLEWARE (NEW) ----------------------
+    @app.middleware("http")
+    async def system_status_middleware(request: Request, call_next):
+        """Check system status before processing requests"""
+        return await settings_middleware(request, call_next)
+
     # ---------------------- CORS ----------------------
     app.add_middleware(
         CORSMiddleware,
@@ -87,7 +104,7 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
-    # app.add_middleware(SecurityMiddleware)
+    
     # ---------------------- ROUTES ----------------------
     app.include_router(api_router, prefix=settings.API_PREFIX)
 
@@ -96,16 +113,26 @@ def create_app() -> FastAPI:
     async def health_check(db: AsyncSession = Depends(get_db)):
         try:
             await db.execute(text("SELECT 1"))
-            return {"system_status": settings.SYSTEM_STATUS}
-
+            system_status = get_system_status_for_config()
+            return {
+                "system_status": system_status,
+                "environment": settings.ENVIRONMENT,
+                "database": "healthy"
+            }
         except Exception as e:
-            return {"status": "error", "db_error": str(e)}
+            return {
+                "status": "error", 
+                "database": "unhealthy",
+                "error": str(e)
+            }
 
     @app.get("/")
     async def root():
+        system_status = get_system_status_for_config()
         return {
-            "status": settings.SYSTEM_STATUS,
+            "status": system_status,
             "environment": settings.ENVIRONMENT,
+            "version": settings.VERSION
         }
 
     return app

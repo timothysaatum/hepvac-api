@@ -13,6 +13,7 @@ from .vaccines.administer_vaccine import router as administer_vaccine
 from .devices.devices import router as device_router
 from .search.search_routes import router as search_router
 from .dashboard.dashboard import router as dashboard_router
+from .settings.settings import router as settings_router
 
 router = APIRouter()
 
@@ -31,3 +32,4 @@ router.include_router(patient_schedule_router)
 router.include_router(reminder_router)
 router.include_router(search_router)
 router.include_router(dashboard_router)
+router.include_router(settings_router)
