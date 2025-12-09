@@ -3,14 +3,12 @@ from typing import Optional, List
 import uuid
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
-from sqlalchemy.orm import selectinload
+from sqlalchemy import func
 from app.models.patient_model import (
     Patient,
     PregnantPatient,
     RegularPatient,
-    Vaccination,
     Child,
-    Payment,
     Prescription,
     MedicationSchedule,
     PatientReminder,
@@ -85,12 +83,14 @@ class PatientRepository:
     async def get_pregnant_patient_by_id(
         self, patient_id: uuid.UUID
     ) -> Optional[PregnantPatient]:
-        """Get pregnant patient by ID with relationships."""
+        """
+        Get pregnant patient by ID - OPTIMIZED.
+        
+        Only loads the patient data itself, not relations.
+        Relations like vaccine_purchases, facility, created_by are loaded separately when needed.
+        """
         result = await self.db.execute(
-            select(PregnantPatient)
-            .options(selectinload(PregnantPatient.children))
-            .options(selectinload(PregnantPatient.vaccinations))
-            .where(
+            select(PregnantPatient).where(
                 PregnantPatient.id == patient_id,
                 PregnantPatient.is_deleted == False,
             )
@@ -98,7 +98,7 @@ class PatientRepository:
         return result.scalars().first()
 
     async def update_pregnant_patient(
-        self, updated_by_id:uuid.UUID, patient: PregnantPatient
+        self, updated_by_id: uuid.UUID, patient: PregnantPatient
     ) -> PregnantPatient:
         """Update pregnant patient."""
         patient.updated_by_id = updated_by_id
@@ -118,19 +118,23 @@ class PatientRepository:
     async def get_regular_patient_by_id(
         self, patient_id: uuid.UUID
     ) -> Optional[RegularPatient]:
-        """Get regular patient by ID with relationships."""
+        """
+        Get regular patient by ID - OPTIMIZED.
+        
+        Only loads the patient data itself, not relations.
+        Relations are loaded separately when needed via dedicated endpoints.
+        """
         result = await self.db.execute(
-            select(RegularPatient)
-            .options(selectinload(RegularPatient.prescriptions))
-            .options(selectinload(RegularPatient.medication_schedules))
-            .where(
+            select(RegularPatient).where(
                 RegularPatient.id == patient_id,
                 RegularPatient.is_deleted == False,
             )
         )
         return result.scalars().first()
 
-    async def update_regular_patient(self,updated_by_id: uuid.UUID, patient: RegularPatient) -> RegularPatient:
+    async def update_regular_patient(
+        self, updated_by_id: uuid.UUID, patient: RegularPatient
+    ) -> RegularPatient:
         """Update regular patient."""
         patient.updated_by_id = updated_by_id
         self.db.add(patient)
@@ -147,7 +151,10 @@ class PatientRepository:
         limit: int = 10,
     ) -> tuple[List[Patient], int]:
         """
-        Get paginated list of patients with filters and total count.
+        Get paginated list of patients with filters and total count - OPTIMIZED.
+
+        Only loads patient data, not relations. This makes the query fast even with
+        hundreds of patients.
 
         Args:
             facility_id: Filter by facility
@@ -160,24 +167,13 @@ class PatientRepository:
             Tuple of (list of patients, total count)
         """
         from sqlalchemy.orm import with_polymorphic
-        from sqlalchemy import func, select
 
         # Use with_polymorphic to load all subclass columns
         poly_patient = with_polymorphic(Patient, [PregnantPatient, RegularPatient])
 
-        # Build base query with all relationships eagerly loaded
+        # Build base query - NO RELATIONS LOADED
         query = (
             select(poly_patient)
-            .options(
-                selectinload(poly_patient.facility),
-                selectinload(poly_patient.created_by),
-                selectinload(poly_patient.updated_by),
-                selectinload(poly_patient.vaccinations),
-                selectinload(poly_patient.vaccine_purchases),
-                selectinload(poly_patient.prescriptions),
-                selectinload(poly_patient.medication_schedules),
-                selectinload(poly_patient.reminders),
-            )
             .where(poly_patient.is_deleted == False)
         )
 

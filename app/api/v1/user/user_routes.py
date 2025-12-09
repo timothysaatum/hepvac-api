@@ -32,6 +32,7 @@ from app.api.dependencies import get_db
 from app.core.utils import logger
 
 
+
 router = APIRouter(prefix="/users", tags=["users"])
 
 

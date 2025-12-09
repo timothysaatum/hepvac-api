@@ -3,6 +3,7 @@ import traceback
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
@@ -11,6 +12,7 @@ from app.db.session import engine, AsyncSessionLocal
 from app.api.v1 import router as api_router
 from app.core.rbac_init import initialize_rbac
 from app.middlewares.settings import get_system_status_for_config, initialize_settings, settings_middleware
+from app.task.notification_scheduler import get_scheduler, start_scheduler, stop_scheduler
 
 logger = logging.getLogger("uvicorn")
 
@@ -26,7 +28,7 @@ async def lifespan(app: FastAPI):
     try:
         async with engine.begin() as conn:
             await conn.run_sync(lambda _: None)
-
+            
         logger.info("Database connection established successfully.")
 
         # Initialize RBAC
@@ -35,18 +37,29 @@ async def lifespan(app: FastAPI):
         
         logger.info("RBAC initialized successfully.")
         
-        # Initialize Settings (NEW)
+        # Initialize Settings
         async with AsyncSessionLocal() as db:
             await initialize_settings(db)
         
         logger.info("Settings initialized successfully.")
 
-        logger.info(
-            {
-                "event_type": "application_startup_complete",
-                "message": "Application started successfully",
-            }
-        )
+        # Initialize Notification Scheduler
+        try:
+            scheduler = await start_scheduler(
+                check_interval_seconds=300,  # Check every 5 minutes
+                max_concurrent_sends=10,     # Max 10 concurrent notifications
+                retry_attempts=3,            # Retry failed sends 3 times
+                retry_delay_seconds=5        # Wait 5 seconds between retries
+            )
+            logger.info(f"Notification scheduler started (interval: 300s, max_concurrent: 10)")
+        except Exception as e:
+            logger.error(f"Failed to start notification scheduler: {e}", exc_info=True)
+            logger.warning("Application will continue without notification scheduler")
+
+        logger.info("=" * 60)
+        logger.info("Application startup complete")
+        logger.info("=" * 60)
+
     except Exception as e:
         logger.error(f"Startup initialization failed: {e}")
         logger.error("Application may not function correctly")
@@ -54,9 +67,21 @@ async def lifespan(app: FastAPI):
     yield
 
     # -------- SHUTDOWN --------
+    logger.info("=" * 60)
     logger.info("Shutting down application...")
+    logger.info("=" * 60)
+    
+    # Stop notification scheduler gracefully
+    try:
+        await stop_scheduler()
+        logger.info("Notification scheduler stopped")
+    except Exception as e:
+        logger.error(f"Error stopping scheduler: {e}")
+    
+    # Dispose database engine
     await engine.dispose()
-    logger.info("Database engine disposed.")
+    logger.info("Database engine disposed")
+    logger.info("Shutdown complete")
 
 
 def create_app() -> FastAPI:
@@ -90,7 +115,7 @@ def create_app() -> FastAPI:
                 return RedirectResponse(str(request.url.replace(scheme="https")))
         return await call_next(request)
 
-    # ---------------------- SETTINGS MIDDLEWARE (NEW) ----------------------
+    # ---------------------- SETTINGS MIDDLEWARE ----------------------
     @app.middleware("http")
     async def system_status_middleware(request: Request, call_next):
         """Check system status before processing requests"""
@@ -105,6 +130,7 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    app.add_middleware(GZipMiddleware, minimum_size=1000, compresslevel=6)
     
     # ---------------------- ROUTES ----------------------
     app.include_router(api_router, prefix=settings.API_PREFIX)
@@ -115,10 +141,19 @@ def create_app() -> FastAPI:
         try:
             await db.execute(text("SELECT 1"))
             system_status = get_system_status_for_config()
+            
+            # Check scheduler status
+            scheduler = get_scheduler()
+            scheduler_status = {
+                "running": scheduler._running if scheduler else False,
+                "initialized": scheduler is not None
+            }
+            
             return {
                 "system_status": system_status,
                 "environment": settings.ENVIRONMENT,
-                "database": "healthy"
+                "database": "healthy",
+                "scheduler": scheduler_status
             }
         except Exception as e:
             return {
@@ -130,10 +165,13 @@ def create_app() -> FastAPI:
     @app.get("/")
     async def root():
         system_status = get_system_status_for_config()
+        scheduler = get_scheduler()
+        
         return {
             "status": system_status,
             "environment": settings.ENVIRONMENT,
-            "version": settings.VERSION
+            "version": settings.VERSION,
+            "scheduler_active": scheduler._running if scheduler else False
         }
 
     return app

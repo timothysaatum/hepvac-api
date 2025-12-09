@@ -26,8 +26,6 @@ router = APIRouter(prefix="/search", tags=["search"])
 
 # ============= Rate Limiting - SECURITY =============
 # Simple in-memory rate limiter (for production, use Redis)
-from collections import defaultdict
-from datetime import datetime, timedelta
 
 # class RateLimiter:
 #     """Simple rate limiter for search endpoints - SECURITY."""

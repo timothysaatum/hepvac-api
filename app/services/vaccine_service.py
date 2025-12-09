@@ -229,19 +229,21 @@ class VaccineService:
 
     # ============= Search Services =============
     async def search_vaccines(
-        self, search_term: str, published_only: bool = False
+        self,
+        vaccine_name: str | None,
+        batch_number: str | None,
+        published_only: bool = False,
+        low_stock: bool = False,
+        created_from: str | None = None,
+        created_to: str | None = None,
     ) -> List[Vaccine]:
-        """Search vaccines by name or batch number."""
-        if not search_term or not search_term.strip():
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Search term cannot be empty",
-            )
+        """Search vaccines by name, batch number, and date range."""
 
-        if len(search_term.strip()) < 2:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Search term must be at least 2 characters long",
-            )
-
-        return await self.repo.search_vaccines(search_term.strip(), published_only)
+        return await self.repo.search_vaccines(
+            vaccine_name.strip() if vaccine_name else None,
+            batch_number.strip() if batch_number else None,
+            published_only,
+            low_stock,
+            created_from,
+            created_to,
+        )

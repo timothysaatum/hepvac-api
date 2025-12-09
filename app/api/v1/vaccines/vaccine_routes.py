@@ -1,6 +1,6 @@
 import traceback
 import uuid
-from typing import List
+from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from math import ceil
@@ -207,49 +207,79 @@ async def list_vaccines(
 
 @router.get(
     "/search",
-    response_model=List[VaccineResponseSchema],
+    response_model=PaginatedResponse[VaccineResponseSchema],
 )
 async def search_vaccines(
-    search: str = Query(
-        ..., min_length=2, description="Search term (vaccine name or batch number)"
-    ),
-    published_only: bool = Query(
-        False, description="Filter to show only published vaccines"
-    ),
+    vaccine_name: Optional[str] = Query(None, description="Search by vaccine name (partial match)"),
+    batch_number: Optional[str] = Query(None, description="Search by batch number (partial match)"),
+    is_published: Optional[bool] = Query(None, description="Filter by published status"),
+    low_stock: Optional[bool] = Query(None, description="Filter by low stock"),
+    created_from: Optional[str] = Query(None, description="Filter by creation date from (YYYY-MM-DD)"),
+    created_to: Optional[str] = Query(None, description="Filter by creation date to (YYYY-MM-DD)"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_staff_or_admin()),
+    pagination: PaginationParams = Depends(get_pagination_params),
 ):
     """
-    Search vaccines by name or batch number.
-
-    Args:
-        search: Search term (vaccine name or batch number)
-        published_only: Filter to show only published vaccines
-        db: Database session
-        current_user: Authenticated admin or staff user
-
-    Returns:
-        List[VaccineResponseSchema]: List of matching vaccines
+    Search vaccines by name or batch number with pagination and date range.
     """
     service = VaccineService(db)
 
     try:
-        vaccines = await service.search_vaccines(search, published_only)
+        vaccines = await service.search_vaccines(
+            vaccine_name=vaccine_name,
+            batch_number=batch_number,
+            published_only=is_published if is_published is not None else False,
+            low_stock=low_stock if low_stock is not None else False,
+            created_from=created_from,  # ADD THIS
+            created_to=created_to,      # ADD THIS
+        )
+
+        # Apply pagination manually since search doesn't use skip/limit
+        total_count = len(vaccines)
+        start = (pagination.page - 1) * pagination.page_size
+        end = start + pagination.page_size
+        paginated_vaccines = vaccines[start:end]
+
+        # Validate responses
+        validated_items = [
+            VaccineResponseSchema.model_validate(v, from_attributes=True)
+            for v in paginated_vaccines
+        ]
+
+        # Build pagination metadata
+        total_pages = ceil(total_count / pagination.page_size) if total_count > 0 else 0
+        has_next = pagination.page < total_pages
+        has_previous = pagination.page > 1
+
+        page_info = PageInfo(
+            total_items=total_count,
+            total_pages=total_pages,
+            current_page=pagination.page,
+            page_size=pagination.page_size,
+            has_next=has_next,
+            has_previous=has_previous,
+            next_page=pagination.page + 1 if has_next else None,
+            previous_page=pagination.page - 1 if has_previous else None,
+        )
+
+        response = PaginatedResponse(items=validated_items, page_info=page_info)
 
         logger.log_info(
             {
                 "event": "vaccines_searched",
-                "search_term": search,
-                "results_count": len(vaccines),
-                "published_only": published_only,
+                "vaccine_name": vaccine_name,
+                "batch_number": batch_number,
+                "results_count": total_count,
+                "is_published": is_published,
+                "low_stock": low_stock,
+                "created_from": created_from,
+                "created_to": created_to,
                 "user_id": str(current_user.id),
             }
         )
 
-        return [
-            VaccineResponseSchema.model_validate(v, from_attributes=True)
-            for v in vaccines
-        ]
+        return response
 
     except HTTPException:
         raise
@@ -258,7 +288,8 @@ async def search_vaccines(
         logger.log_error(
             {
                 "event": "search_vaccines_error",
-                "search_term": search,
+                "vaccine_name": vaccine_name,
+                "batch_number": batch_number,
                 "error": str(e),
                 "user_id": str(current_user.id),
             },

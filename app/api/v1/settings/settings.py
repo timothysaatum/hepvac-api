@@ -8,6 +8,8 @@ from app.core.settings_schemas import SettingPublic, SettingResponse, SettingUpd
 from app.core.settings_service import SettingsService, _settings_cache
 from app.api.dependencies import get_db
 import logging
+from app.core.cache import cached
+
 
 from app.models.user_model import User
 
@@ -16,10 +18,11 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/settings", tags=["Settings"])
 
 
+@cached(ttl=300, key_prefix="settings")
 @router.get("/public", response_model=SettingPublic)
 async def get_public_settings(
-    db: AsyncSession = Depends(get_db)
-):
+        db: AsyncSession = Depends(get_db)
+    ):
     """
     Get public settings (no authentication required).
     Used by login page and public-facing components.
@@ -40,6 +43,7 @@ async def get_public_settings(
         )
 
 
+@cached(ttl=300, key_prefix="settings")
 @router.get("", response_model=SettingResponse)
 async def get_settings(
     current_user: Annotated[User, Depends(get_current_user)],

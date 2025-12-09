@@ -1,9 +1,11 @@
 from typing import Optional, List
 import uuid
+from fastapi import Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy.orm import selectinload
-from sqlalchemy import func
+from sqlalchemy import func, or_
+from datetime import datetime
 from app.models.vaccine_model import Vaccine, PatientVaccinePurchase
 
 
@@ -122,24 +124,56 @@ class VaccineRepository:
 
     # ============= Search Operations =============
     async def search_vaccines(
-        self, search_term: str, published_only: bool = False
+        self,
+        vaccine_name: str | None = None,
+        batch_number: str | None = None,
+        published_only: bool = False,
+        low_stock: bool = False,
+        created_from: str | None = None,
+        created_to: str | None = None,
     ) -> List[Vaccine]:
-        """Search vaccines by name or batch number."""
-        search_pattern = f"%{search_term}%"
+        """Search vaccines by name, batch number, and date range."""
 
         query = (
             select(Vaccine)
             .options(selectinload(Vaccine.added_by))
-            .where(
-                (Vaccine.vaccine_name.ilike(search_pattern))
-                | (Vaccine.batch_number.ilike(search_pattern))
-            )
         )
+
+        # Apply filters only if provided
+        conditions = []
+        if vaccine_name:
+            conditions.append(Vaccine.vaccine_name.ilike(f"%{vaccine_name}%"))
+        if batch_number:
+            conditions.append(Vaccine.batch_number.ilike(f"%{batch_number}%"))
+
+        if conditions:
+            query = query.where(or_(*conditions))
 
         if published_only:
             query = query.where(Vaccine.is_published == True)
+    
+        if low_stock:
+            query = query.where(Vaccine.quantity < 50)
+    
+        # ADD DATE RANGE FILTERING
+        if created_from:
+            try:
+                from_date = datetime.strptime(created_from, "%Y-%m-%d")
+                query = query.where(Vaccine.created_at >= from_date)
+            except ValueError:
+                pass
+    
+        if created_to:
+            try:
+                to_date = datetime.strptime(created_to, "%Y-%m-%d")
+                # Add 1 day to include the entire "to" date
+                to_date = to_date.replace(hour=23, minute=59, second=59)
+                query = query.where(Vaccine.created_at <= to_date)
+            except ValueError:
+                pass
 
         query = query.order_by(Vaccine.vaccine_name.asc())
 
         result = await self.db.execute(query)
         return result.scalars().all()
+

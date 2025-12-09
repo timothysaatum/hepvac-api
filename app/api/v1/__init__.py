@@ -14,6 +14,7 @@ from .devices.devices import router as device_router
 from .search.search_routes import router as search_router
 from .dashboard.dashboard import router as dashboard_router
 from .settings.settings import router as settings_router
+from .admin.scheduler_api import router as admin_router
 
 router = APIRouter()
 
@@ -33,3 +34,4 @@ router.include_router(reminder_router)
 router.include_router(search_router)
 router.include_router(dashboard_router)
 router.include_router(settings_router)
+router.include_router(admin_router)
