@@ -11,8 +11,16 @@ from app.config.config import settings
 from app.db.session import engine, AsyncSessionLocal
 from app.api.v1 import router as api_router
 from app.core.rbac_init import initialize_rbac
-from app.middlewares.settings import get_system_status_for_config, initialize_settings, settings_middleware
-from app.task.notification_scheduler import get_scheduler, start_scheduler, stop_scheduler
+from app.middlewares.settings import (
+    get_system_status_for_config, 
+    initialize_settings, 
+    settings_middleware
+)
+from app.task.notification_scheduler import (
+    get_scheduler, 
+    start_scheduler, 
+    stop_scheduler
+)
 
 logger = logging.getLogger("uvicorn")
 
@@ -49,11 +57,22 @@ async def lifespan(app: FastAPI):
                 check_interval_seconds=300,  # Check every 5 minutes
                 max_concurrent_sends=10,     # Max 10 concurrent notifications
                 retry_attempts=3,            # Retry failed sends 3 times
-                retry_delay_seconds=5        # Wait 5 seconds between retries
+                retry_delay_seconds=5,       # Wait 5 seconds between retries
+                deduplication_hours=72       # Don't send to same person within 24 hours
             )
-            logger.info(f"Notification scheduler started (interval: 300s, max_concurrent: 10)")
+            logger.info("=" * 60)
+            logger.info("NOTIFICATION SCHEDULER STARTED")
+            logger.info(f"   - Check interval: every 5 minutes")
+            logger.info(f"   - Max concurrent sends: 10")
+            logger.info(f"   - Retry attempts: 3")
+            logger.info(f"   - Deduplication: 72 hours")
+            logger.info(f"   - Status: RUNNING")
+            logger.info("=" * 60)
         except Exception as e:
-            logger.error(f"Failed to start notification scheduler: {e}", exc_info=True)
+            logger.error("=" * 60)
+            logger.error(f"FAILED TO START NOTIFICATION SCHEDULER: {e}")
+            logger.error("=" * 60)
+            logger.error(traceback.format_exc())
             logger.warning("Application will continue without notification scheduler")
 
         logger.info("=" * 60)
@@ -62,6 +81,7 @@ async def lifespan(app: FastAPI):
 
     except Exception as e:
         logger.error(f"Startup initialization failed: {e}")
+        logger.error(traceback.format_exc())
         logger.error("Application may not function correctly")
 
     yield
@@ -73,10 +93,16 @@ async def lifespan(app: FastAPI):
     
     # Stop notification scheduler gracefully
     try:
-        await stop_scheduler()
-        logger.info("Notification scheduler stopped")
+        scheduler = get_scheduler()
+        if scheduler:
+            logger.info("Stopping notification scheduler...")
+            await stop_scheduler()
+            logger.info("Notification scheduler stopped successfully")
+        else:
+            logger.info("No scheduler to stop")
     except Exception as e:
         logger.error(f"Error stopping scheduler: {e}")
+        logger.error(traceback.format_exc())
     
     # Dispose database engine
     await engine.dispose()
@@ -136,7 +162,7 @@ def create_app() -> FastAPI:
     app.include_router(api_router, prefix=settings.API_PREFIX)
 
     # ---------------------- HEALTH CHECK ----------------------
-    @app.get("/speed.hepvac.com")
+    @app.get("/health")
     async def health_check(db: AsyncSession = Depends(get_db)):
         try:
             await db.execute(text("SELECT 1"))
@@ -146,21 +172,28 @@ def create_app() -> FastAPI:
             scheduler = get_scheduler()
             scheduler_status = {
                 "running": scheduler._running if scheduler else False,
-                "initialized": scheduler is not None
+                "initialized": scheduler is not None,
+                "check_interval": scheduler.check_interval if scheduler else None,
+                "current_batch_id": str(scheduler._current_batch_id) if scheduler and scheduler._current_batch_id else None,
             }
             
             return {
+                "status": "healthy",
                 "system_status": system_status,
                 "environment": settings.ENVIRONMENT,
-                "database": "healthy",
+                "database": "connected",
                 "scheduler": scheduler_status
             }
         except Exception as e:
-            return {
-                "status": "error", 
-                "database": "unhealthy",
-                "error": str(e)
-            }
+            logger.error(f"Health check failed: {e}", exc_info=True)
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "status": "unhealthy", 
+                    "database": "disconnected",
+                    "error": str(e)
+                }
+            )
 
     @app.get("/")
     async def root():
@@ -171,8 +204,39 @@ def create_app() -> FastAPI:
             "status": system_status,
             "environment": settings.ENVIRONMENT,
             "version": settings.VERSION,
-            "scheduler_active": scheduler._running if scheduler else False
+            "scheduler": {
+                "active": scheduler._running if scheduler else False,
+                "initialized": scheduler is not None
+            }
         }
+
+    # ---------------------- SCHEDULER STATS ENDPOINT ----------------------
+    @app.get("/api/v1/scheduler/stats")
+    async def get_scheduler_stats(
+        days: int = 7,
+        db: AsyncSession = Depends(get_db)
+    ):
+        """Get notification scheduler statistics"""
+        scheduler = get_scheduler()
+        
+        if not scheduler:
+            return JSONResponse(
+                status_code=503,
+                content={"error": "Scheduler not initialized"}
+            )
+        
+        try:
+            stats = await scheduler.get_stats(db, days=days)
+            return {
+                "success": True,
+                "stats": stats
+            }
+        except Exception as e:
+            logger.error(f"Error getting scheduler stats: {e}", exc_info=True)
+            return JSONResponse(
+                status_code=500,
+                content={"error": str(e)}
+            )
 
     return app
 

@@ -3,7 +3,8 @@ import time
 import uuid
 from typing import Optional
 from datetime import date
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import status as http_status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.dependencies import get_db
@@ -108,7 +109,7 @@ async def search_patients(
     created_to: Optional[date] = Query(None, description="Filter by creation date to (YYYY-MM-DD)"),
     # Pagination
     page: int = Query(1, ge=1, description="Page number"),
-    page_size: int = Query(10, ge=1, le=50, description="Items per page (max 50)"),  # SECURITY: Limited to 50
+    page_size: int = Query(10, ge=1, le=50, description="Items per page (max 50)"),
     # Dependencies
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_staff_or_admin()),
@@ -199,7 +200,7 @@ async def search_patients(
             "user_id": str(current_user.id),
         })
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=http_status.HTTP_400_BAD_REQUEST,
             detail=str(e),
         )
     
@@ -212,7 +213,7 @@ async def search_patients(
             "user_id": str(current_user.id),
         })
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An error occurred while searching patients",
         )
 
@@ -303,7 +304,7 @@ async def search_vaccinations(
     except HTTPException:
         raise
     except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        raise HTTPException(status_code=http_status.HTTP_400_BAD_REQUEST, detail=str(e))
     except Exception as e:
         logger.log_error({
             "event": "vaccination_search_error",
@@ -311,7 +312,7 @@ async def search_vaccinations(
             "traceback": traceback.format_exc(),
         })
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An error occurred while searching vaccinations",
         )
 
@@ -409,7 +410,7 @@ async def search_payments(
     except HTTPException:
         raise
     except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        raise HTTPException(status_code=http_status.HTTP_400_BAD_REQUEST, detail=str(e))
     except Exception as e:
         logger.log_error({
             "event": "payment_search_error",
@@ -417,6 +418,6 @@ async def search_payments(
             "traceback": traceback.format_exc(),
         })
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An error occurred while searching payments",
         )

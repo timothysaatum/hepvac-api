@@ -23,24 +23,19 @@ class EmailConfig:
     SMTP_PORT: int = getattr(settings, "SMTP_PORT", 587)
     SMTP_USER: str = getattr(settings, "SMTP_USER", "")
     SMTP_PASSWORD: str = getattr(settings, "SMTP_PASSWORD", "")
-    FROM_EMAIL: str = getattr(settings, "FROM_EMAIL", "timothysaatum@gmail.com")
-    FROM_NAME: str = getattr(settings, "FROM_NAME", "Your App")
+    FROM_EMAIL: str = getattr(settings, "FROM_EMAIL", "noreply@healthapp.com")
+    FROM_NAME: str = getattr(settings, "FROM_NAME", "Health App")
 
 
 class SMSConfig:
     """SMS configuration."""
 
-    # Twilio
-    AFRICAISTALKING: str = getattr(settings, "TWILIO_ACCOUNT_SID", "")
-    AFRICAISTALKING_AUTH_TOKEN: str = getattr(settings, "TWILIO_AUTH_TOKEN", "")
-    AFRICAISTALKING_PHONE_NUMBER: str = getattr(settings, "TWILIO_PHONE_NUMBER", "")
-
-    # Termii (Alternative)
+    # Termii (Primary for Ghana)
     TERMII_API_KEY: str = getattr(settings, "TERMII_API_KEY", "")
-    TERMII_SENDER_ID: str = getattr(settings, "TERMII_SENDER_ID", "")
+    TERMII_SENDER_ID: str = getattr(settings, "TERMII_SENDER_ID", "HealthApp")
 
-    # Default provider: 'twilio' or 'termii'
-    SMS_PROVIDER: str = getattr(settings, "SMS_PROVIDER", "twilio")
+    # Default provider: 'termii', 'twilio', or 'mock'
+    SMS_PROVIDER: str = getattr(settings, "SMS_PROVIDER", "termii")
 
 
 class EmailService:
@@ -70,14 +65,6 @@ class EmailService:
 
         Returns:
             bool: True if sent successfully
-
-        Example:
-            >>> await EmailService.send_email(
-            ...     to="user@example.com",
-            ...     subject="Welcome!",
-            ...     body="Welcome to our platform",
-            ...     html="<h1>Welcome!</h1><p>Welcome to our platform</p>"
-            ... )
         """
         try:
             # Create message
@@ -151,14 +138,6 @@ class EmailService:
 
         Returns:
             bool: True if sent successfully
-
-        Example:
-            >>> await EmailService.send_template_email(
-            ...     to="user@example.com",
-            ...     subject="Welcome!",
-            ...     template_name="welcome",
-            ...     context={"username": "John", "activation_link": "..."}
-            ... )
         """
         try:
             # Load templates
@@ -200,94 +179,83 @@ class SMSService:
     """Service for sending SMS notifications."""
 
     @staticmethod
-    async def send_sms_twilio(to: str, message: str) -> bool:
-        """Send SMS using Africa is Taling."""
-        try:
-            url = f"https://api.twilio.com/2010-04-01/Accounts/{SMSConfig.AFRICAISTALKING}/Messages.json"
-
-            async with httpx.AsyncClient() as client:
-                response = await client.post(
-                    url,
-                    auth=(SMSConfig.AFRICAISTALKING_AUTH_TOKEN, SMSConfig.AFRICAISTALKING_AUTH_TOKEN),
-                    data={
-                        "From": SMSConfig.AFRICAISTALKING_PHONE_NUMBER,
-                        "To": to,
-                        "Body": message,
-                    },
-                )
-
-                if response.status_code == 201:
-                    logger.log_info(
-                        {
-                            "event_type": "sms_sent",
-                            "provider": "twilio",
-                            "to": to,
-                        }
-                    )
-                    return True
-                else:
-                    logger.log_error(
-                        {
-                            "event_type": "sms_send_failed",
-                            "provider": "twilio",
-                            "to": to,
-                            "status_code": response.status_code,
-                            "response": response.text,
-                        }
-                    )
-                    return False
-
-        except Exception as e:
-            logger.log_error(
-                {
-                    "event_type": "sms_send_error",
-                    "provider": "twilio",
-                    "to": to,
-                    "error": str(e),
-                },
-                exc_info=True,
-            )
-            return False
+    def _format_phone_number(phone: str, provider: str = "termii") -> str:
+        """Format phone number for the specific provider."""
+        # Remove spaces and special characters
+        phone = phone.replace(" ", "").replace("-", "").replace("(", "").replace(")", "")
+        
+        # Handle Ghana numbers (starting with 0)
+        if phone.startswith("0"):
+            phone = "233" + phone[1:]  # Ghana country code
+        
+        # Remove + for Termii, keep it for Twilio
+        if provider == "termii":
+            return phone.replace("+", "")
+        else:  # twilio
+            if not phone.startswith("+"):
+                phone = "+" + phone
+            return phone
 
     @staticmethod
-    async def send_sms_termii(to: str, message: str) -> bool:
-        """Send SMS using Termii (African SMS provider)."""
+    async def send_sms_termii(to: str, message: str) -> Dict[str, Any]:
+        """
+        Send SMS using Termii (African SMS provider - best for Ghana).
+        
+        Returns:
+            Dict with 'success', 'message_id', and optional 'error' keys
+        """
         try:
+            # Format phone number (without +)
+            formatted_phone = SMSService._format_phone_number(to, provider="termii")
+            
             url = "https://api.ng.termii.com/api/sms/send"
-
+            print(f"========={url}")
             async with httpx.AsyncClient() as client:
                 response = await client.post(
                     url,
                     json={
-                        "to": to,
+                        "to": formatted_phone,
                         "from": SMSConfig.TERMII_SENDER_ID,
                         "sms": message,
                         "type": "plain",
                         "channel": "generic",
                         "api_key": SMSConfig.TERMII_API_KEY,
                     },
+                    timeout=30.0,
                 )
 
                 if response.status_code == 200:
+                    data = response.json()
                     logger.log_info(
                         {
                             "event_type": "sms_sent",
                             "provider": "termii",
-                            "to": to,
+                            "to": formatted_phone,
+                            "message_id": data.get("message_id"),
                         }
                     )
-                    return True
+                    return {
+                        "success": True,
+                        "message_id": data.get("message_id"),
+                        "balance": data.get("balance"),
+                        "to": formatted_phone,
+                    }
                 else:
+                    error_msg = f"Status {response.status_code}: {response.text}"
                     logger.log_error(
                         {
                             "event_type": "sms_send_failed",
                             "provider": "termii",
-                            "to": to,
+                            "to": formatted_phone,
                             "status_code": response.status_code,
                             "response": response.text,
                         }
                     )
-                    return False
+                    return {
+                        "success": False,
+                        "error": error_msg,
+                        "to": formatted_phone,
+                    }
 
         except Exception as e:
             logger.log_error(
@@ -299,28 +267,60 @@ class SMSService:
                 },
                 exc_info=True,
             )
-            return False
+            return {
+                "success": False,
+                "error": str(e),
+                "to": to,
+            }
+
+    @staticmethod
+    async def send_sms_mock(to: str, message: str) -> Dict[str, Any]:
+        """Mock SMS sending for testing."""
+        formatted_phone = SMSService._format_phone_number(to)
+        
+        print(f"\n{'='*60}")
+        print(f"[MOCK SMS SENT]")
+        print(f"To: {formatted_phone}")
+        print(f"Message: {message}")
+        print(f"{'='*60}\n")
+        
+        logger.log_info(
+            {
+                "event_type": "sms_sent",
+                "provider": "mock",
+                "to": formatted_phone,
+            }
+        )
+        
+        return {
+            "success": True,
+            "message_id": f"mock_{hash(formatted_phone + message)}",
+            "to": formatted_phone,
+        }
 
     @staticmethod
     async def send_sms(
-        to: str | List[str], message: str, provider: Optional[str] = None
-    ) -> Dict[str, bool]:
+        to: str | List[str], 
+        message: str, 
+        provider: Optional[str] = None
+    ) -> Dict[str, Dict[str, Any]]:
         """
         Send SMS using configured provider.
 
         Args:
-            to: Recipient phone number(s) in E.164 format (+1234567890)
-            message: SMS message text
-            provider: Override default provider ('twilio' or 'termii')
+            to: Recipient phone number(s) in any format
+            message: SMS message text (max 160 chars for single SMS)
+            provider: Override default provider ('termii', 'twilio', or 'mock')
 
         Returns:
-            Dict mapping phone numbers to success status
+            Dict mapping phone numbers to result dicts with 'success', 'message_id', etc.
 
         Example:
-            >>> await SMSService.send_sms(
-            ...     to="+1234567890",
-            ...     message="Your verification code is: 123456"
+            >>> results = await SMSService.send_sms(
+            ...     to="0501234567",
+            ...     message="Your appointment is tomorrow at 10 AM"
             ... )
+            >>> print(results["233501234567"]["success"])  # True
         """
         provider = provider or SMSConfig.SMS_PROVIDER
 
@@ -330,10 +330,10 @@ class SMSService:
 
         results = {}
         for phone in to:
-            if provider == "twilio":
-                success = await SMSService.send_sms_twilio(phone, message)
-            elif provider == "termii":
-                success = await SMSService.send_sms_termii(phone, message)
+            if provider == "termii":
+                result = await SMSService.send_sms_termii(phone, message)
+            elif provider == "mock":
+                result = await SMSService.send_sms_mock(phone, message)
             else:
                 logger.log_error(
                     {
@@ -341,9 +341,14 @@ class SMSService:
                         "provider": provider,
                     }
                 )
-                success = False
+                result = {
+                    "success": False,
+                    "error": f"Invalid SMS provider: {provider}",
+                    "to": phone,
+                }
 
-            results[phone] = success
+            # Use the formatted phone number as key
+            results[result["to"]] = result
 
         return results
 
@@ -389,8 +394,36 @@ class NotificationService:
     async def send_verification_code_sms(phone: str, code: str) -> bool:
         """Send verification code via SMS."""
         message = f"Your verification code is: {code}. Valid for 10 minutes."
-        result = await SMSService.send_sms(phone, message)
-        return result.get(phone, False)
+        results = await SMSService.send_sms(phone, message)
+        
+        # Get result for the formatted phone number
+        for result in results.values():
+            return result.get("success", False)
+        
+        return False
+
+    @staticmethod
+    async def send_patient_reminder(
+        phone: str, 
+        patient_name: str,
+        reminder_message: str
+    ) -> Dict[str, Any]:
+        """
+        Send reminder to patient via SMS.
+        
+        Returns:
+            Dict with 'success', 'message_id', and optional 'error' keys
+        """
+        # Personalize message
+        message = reminder_message.replace("{name}", patient_name)
+        
+        results = await SMSService.send_sms(phone, message)
+        
+        # Return first (and should be only) result
+        for result in results.values():
+            return result
+        
+        return {"success": False, "error": "No results returned"}
 
     @staticmethod
     async def send_alert(
@@ -416,6 +449,9 @@ class NotificationService:
 
         if phone and message:
             sms_results = await SMSService.send_sms(phone, message)
-            results["sms"] = sms_results.get(phone, False)
+            # Get first result
+            for result in sms_results.values():
+                results["sms"] = result.get("success", False)
+                break
 
         return results

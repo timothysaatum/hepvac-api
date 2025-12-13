@@ -1,5 +1,5 @@
 """
-Enhanced Notification Scheduler with Database Logging
+Enhanced Notification Scheduler with Database Logging and Patient Integration
 
 Production-ready version with persistent logging and deduplication.
 """
@@ -8,17 +8,19 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, and_, func
+from sqlalchemy import select, and_, func, or_
 from contextlib import asynccontextmanager
 
-from app.core.notifications import EmailService, SMSService
-from app.core.settings import SystemStatus
+from app.core.notifications import SMSService, EmailService
+from app.core.settings import SystemStatus, NotificationTarget
 from app.core.settings_service import SettingsService
 from app.core.notification_log import (
     NotificationLog,
     NotificationChannel,
     NotificationStatus
 )
+from app.models.patient_model import Patient, PregnantPatient, RegularPatient
+from app.schemas.patient_schemas import PatientStatus, PatientType
 from app.db.session import AsyncSessionLocal as async_session_maker
 import logging
 
@@ -28,19 +30,22 @@ logger = logging.getLogger(__name__)
 class NotificationScheduler:
     """
     Production-ready notification scheduler with database persistence.
+    Integrates with Patient model and Settings.
     """
     
     def __init__(
         self,
-        check_interval_seconds: int = 300,
+        check_interval_seconds: int = 300,  # 5 minutes
         max_concurrent_sends: int = 10,
         retry_attempts: int = 3,
         retry_delay_seconds: int = 5,
+        deduplication_hours: int = 24,
     ):
         self.check_interval = check_interval_seconds
         self.max_concurrent = max_concurrent_sends
         self.retry_attempts = retry_attempts
         self.retry_delay = retry_delay_seconds
+        self.deduplication_hours = deduplication_hours
         
         self._running = False
         self._task: Optional[asyncio.Task] = None
@@ -102,11 +107,12 @@ class NotificationScheduler:
                 
                 # Check if should send
                 should_send = await self._should_send_notifications(db, settings)
+                print(f"=================={should_send}")
                 if not should_send:
                     logger.debug("Not time to send yet")
                     return
                 
-                # Get recipients
+                # Get recipients based on target
                 recipients = await self._get_target_recipients(db, settings)
                 if not recipients:
                     logger.info("No recipients found")
@@ -155,7 +161,7 @@ class NotificationScheduler:
         if not last_sent:
             return True  # First time, send
         
-        time_since_last = datetime.now(timezone.utc) - last_sent
+        time_since_last = datetime.now() - last_sent
         interval = timedelta(days=settings.reminder_interval_days)
         
         return time_since_last >= interval
@@ -166,57 +172,93 @@ class NotificationScheduler:
         settings
     ) -> List[Dict]:
         """
-        Get recipients based on target setting.
-        
-        IMPORTANT: Adjust this query to match your database schema.
+        Get recipients based on notification target setting.
+        Filters patients who have opted in for messaging.
         """
         target = settings.notification_target
-        
-        # Example query - CUSTOMIZE THIS FOR YOUR SCHEMA
-        # from app.models.patient import Patient
-        
-        # Base query
-        # query = select(Patient).where(Patient.is_active == True)
-        
+        print(f'=========={target}')
+        # Base query - only active patients who accept messaging
+        query = select(Patient).where(
+            and_(
+                Patient.is_deleted == False,
+                # Patient.accepts_messaging == True,
+                Patient.status == PatientStatus.ACTIVE.value
+            )
+        )
         # Apply target filter
-        # if target == NotificationTarget.PREGNANT_ONLY.value:
-        #     query = query.where(Patient.is_pregnant == True)
-        # elif target == NotificationTarget.MOTHERS_ONLY.value:
-        #     query = query.where(Patient.has_children == True)
-        # ... etc
+        if target == NotificationTarget.PREGNANT_ONLY.value:
+            query = query.where(Patient.patient_type == PatientType.PREGNANT.value)
         
-        # result = await db.execute(query)
-        # patients = result.scalars().all()
+        elif target == NotificationTarget.MOTHERS_ONLY.value:
+            # Mothers who have delivered (postpartum)
+            query = query.where(
+                and_(
+                    Patient.patient_type == PatientType.PREGNANT.value,
+                    Patient.status == PatientStatus.POSTPARTUM.value
+                )
+            )
         
-        # recipients = []
-        # for patient in patients:
-        #     # Check deduplication - skip if sent recently
-        #     if await self._was_sent_recently(db, patient.id):
-        #         continue
-        #     
-        #     recipients.append({
-        #         "id": str(patient.id),
-        #         "name": patient.full_name,
-        #         "email": patient.email,
-        #         "phone": patient.phone_number,
-        #         "type": "patient"
-        #     })
+        elif target == NotificationTarget.REGULAR_ONLY.value:
+            query = query.where(Patient.patient_type == PatientType.REGULAR.value)
         
-        # For now, return empty list
-        # Replace with actual implementation
+        # elif target == NotificationTarget.PREGNANT_AND_MOTHERS.value:
+        #     query = query.where(
+        #         and_(
+        #             Patient.patient_type == PatientType.PREGNANT.value,
+        #             or_(
+        #                 Patient.status == PatientStatus.ACTIVE.value,
+        #                 Patient.status == PatientStatus.POSTPARTUM.value
+        #             )
+        #         )
+        #     )
+        
+        elif target == NotificationTarget.ALL_PATIENTS.value:
+            # No additional filter - all active patients
+            pass
+        
+        else:
+            logger.warning(f"Unknown notification target: {target}")
+            return []
+        
+        # Execute query
+        result = await db.execute(query)
+        patients = result.scalars().all()
+        print(f"patients========>{patients}")
+        
+        # Convert to recipient dicts
         recipients = []
+        for patient in patients:
+            # Check deduplication - skip if sent recently
+            if await self._was_sent_recently(db, patient.id, self.deduplication_hours):
+                logger.debug(f"Skipping {patient.name} - sent recently")
+                continue
+            
+            # Validate phone number
+            if not patient.phone or len(patient.phone) < 10:
+                logger.warning(f"Invalid phone for {patient.name}: {patient.phone}")
+                continue
+            
+            recipients.append({
+                "id": str(patient.id),
+                "name": patient.name,
+                "phone": patient.phone,
+                "patient_type": patient.patient_type.value if hasattr(patient.patient_type, 'value') else str(patient.patient_type),
+                "status": patient.status.value if hasattr(patient.status, 'value') else str(patient.status),
+                "type": "patient"
+            })
         
-        logger.info(f"Found {len(recipients)} recipients for '{target}'")
+        logger.info(f"Found {len(recipients)} recipients for target '{target}'")
+        print(f"Recipients=========>{recipients}")
         return recipients
     
     async def _was_sent_recently(
         self,
         db: AsyncSession,
         recipient_id: uuid.UUID,
-        hours: int = 24
+        hours: int
     ) -> bool:
         """Check if notification was sent to recipient recently"""
-        cutoff = datetime.utcnow() - timedelta(hours=hours)
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
         
         result = await db.execute(
             select(func.count(NotificationLog.id))
@@ -251,7 +293,15 @@ class NotificationScheduler:
         ]
         
         # Execute concurrently
-        await asyncio.gather(*tasks, return_exceptions=True)
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        # Log any exceptions
+        for i, result in enumerate(results):
+            if isinstance(result, Exception):
+                logger.error(
+                    f"Error sending to {recipients[i]['name']}: {result}",
+                    exc_info=result
+                )
     
     async def _send_with_logging(
         self,
@@ -264,21 +314,10 @@ class NotificationScheduler:
             # Personalize message
             personalized = message.replace("{name}", recipient.get("name", ""))
             
-            # Send via each available channel
-            email_log = None
-            sms_log = None
-            
-            # Email
-            if recipient.get("email"):
-                email_log = await self._send_email_with_log(
-                    db, recipient, personalized
-                )
-            
-            # SMS
-            if recipient.get("phone"):
-                sms_log = await self._send_sms_with_log(
-                    db, recipient, personalized
-                )
+            # Send SMS (primary channel for patients)
+            sms_log = await self._send_sms_with_log(
+                db, recipient, personalized
+            )
             
             # Commit logs
             try:
@@ -286,61 +325,6 @@ class NotificationScheduler:
             except Exception as e:
                 logger.error(f"Error committing logs: {e}")
                 await db.rollback()
-    
-    async def _send_email_with_log(
-        self,
-        db: AsyncSession,
-        recipient: Dict,
-        message: str
-    ) -> NotificationLog:
-        """Send email and create log entry"""
-        # Create log entry
-        log = NotificationLog(
-            recipient_id=uuid.UUID(recipient["id"]),
-            recipient_type=recipient.get("type", "patient"),
-            recipient_name=recipient["name"],
-            recipient_email=recipient["email"],
-            channel=NotificationChannel.EMAIL.value,
-            subject="Vaccination Reminder",
-            message=message,
-            notification_type="vaccination_reminder",
-            status=NotificationStatus.PENDING.value,
-            triggered_by="scheduler",
-            batch_id=self._current_batch_id,
-        )
-        
-        db.add(log)
-        await db.flush()  # Get ID
-        
-        # Attempt to send
-        for attempt in range(1, self.retry_attempts + 1):
-            try:
-                success = await EmailService.send_email(
-                    to=recipient["email"],
-                    subject="Vaccination Reminder",
-                    body=message,
-                    html=self._format_html(message)
-                )
-                
-                if success:
-                    log.mark_sent()
-                    logger.info(f"Email sent to {recipient['name']}")
-                    return log
-                
-                # Failed, retry if possible
-                if attempt < self.retry_attempts:
-                    await asyncio.sleep(self.retry_delay * attempt)
-                    log.retry_count += 1
-                
-            except Exception as e:
-                log.retry_count += 1
-                if attempt == self.retry_attempts:
-                    log.mark_failed(str(e))
-                    logger.error(f"Email failed to {recipient['name']}: {e}")
-                else:
-                    await asyncio.sleep(self.retry_delay * attempt)
-        
-        return log
     
     async def _send_sms_with_log(
         self,
@@ -364,7 +348,7 @@ class NotificationScheduler:
         )
         
         db.add(log)
-        await db.flush()
+        await db.flush()  # Get ID
         
         # Attempt to send
         for attempt in range(1, self.retry_attempts + 1):
@@ -374,11 +358,26 @@ class NotificationScheduler:
                     message=message
                 )
                 
-                if result.get(recipient["phone"], False):
+                # Get the result (result is a dict mapping phones to results)
+                success = False
+                message_id = None
+                
+                for phone_result in result.values():
+                    success = phone_result.get("success", False)
+                    message_id = phone_result.get("message_id")
+                    if not success:
+                        error = phone_result.get("error", "Unknown error")
+                        log.error_message = error
+                    break
+                
+                if success:
                     log.mark_sent()
-                    logger.info(f"SMS sent to {recipient['name']}")
+                    log.provider_message_id = message_id
+                    log.provider = "termii"  # Or get from config
+                    logger.info(f"SMS sent to {recipient['name']} ({recipient['phone']})")
                     return log
                 
+                # Failed, retry if possible
                 if attempt < self.retry_attempts:
                     await asyncio.sleep(self.retry_delay * attempt)
                     log.retry_count += 1
@@ -391,6 +390,10 @@ class NotificationScheduler:
                 else:
                     await asyncio.sleep(self.retry_delay * attempt)
         
+        # If we got here, all attempts failed
+        if log.status == NotificationStatus.PENDING.value:
+            log.mark_failed("All retry attempts exhausted")
+        
         return log
     
     def _get_default_message(self) -> str:
@@ -401,23 +404,6 @@ class NotificationScheduler:
             "Please contact us to confirm your appointment.\n\n"
             "Stay healthy!"
         )
-    
-    def _format_html(self, text: str) -> str:
-        """Format HTML email"""
-        return f"""
-        <html>
-            <body style="font-family: Arial, sans-serif; padding: 20px;">
-                <div style="max-width: 600px; margin: 0 auto;">
-                    <h2 style="color: #2c3e50;">Vaccination Reminder</h2>
-                    <p style="line-height: 1.6;">{text.replace(chr(10), '<br>')}</p>
-                    <hr style="margin: 20px 0; border: none; border-top: 1px solid #ddd;">
-                    <p style="font-size: 12px; color: #888;">
-                        Automated message - please do not reply.
-                    </p>
-                </div>
-            </body>
-        </html>
-        """
     
     @asynccontextmanager
     async def _get_db_session(self):
@@ -438,7 +424,7 @@ class NotificationScheduler:
         # Total sent
         total_result = await db.execute(
             select(func.count(NotificationLog.id))
-            .where(NotificationLog.sent_at >= date_from)
+            .where(NotificationLog.created_at >= date_from)
         )
         total = total_result.scalar()
         
@@ -448,16 +434,35 @@ class NotificationScheduler:
                 NotificationLog.status,
                 func.count(NotificationLog.id)
             )
-            .where(NotificationLog.sent_at >= date_from)
+            .where(NotificationLog.created_at >= date_from)
             .group_by(NotificationLog.status)
         )
         by_status = dict(status_result.all())
+        
+        # By channel
+        channel_result = await db.execute(
+            select(
+                NotificationLog.channel,
+                func.count(NotificationLog.id)
+            )
+            .where(NotificationLog.created_at >= date_from)
+            .group_by(NotificationLog.channel)
+        )
+        by_channel = dict(channel_result.all())
+        
+        # Success rate
+        success_count = by_status.get(NotificationStatus.SENT.value, 0) + \
+                       by_status.get(NotificationStatus.DELIVERED.value, 0)
+        success_rate = (success_count / total * 100) if total > 0 else 0
         
         return {
             "running": self._running,
             "period_days": days,
             "total_sent": total,
             "by_status": by_status,
+            "by_channel": by_channel,
+            "success_rate": round(success_rate, 2),
+            "current_batch_id": str(self._current_batch_id) if self._current_batch_id else None,
         }
 
 
@@ -478,7 +483,7 @@ async def start_scheduler(**kwargs) -> NotificationScheduler:
 
 
 async def stop_scheduler():
-    """Stop the enhanced scheduler"""
+    """Stop the scheduler"""
     global _scheduler
     
     if _scheduler:

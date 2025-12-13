@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from sqlalchemy import String, Text, Index, ForeignKey
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-from sqlalchemy.dialects.postgresql import UUID as PGUUID
+from sqlalchemy.dialects.postgresql import UUID as PGUUID, ENUM as PGENUM
 from app.db.base import Base
 
 
@@ -27,6 +27,20 @@ class NotificationStatus(str, Enum):
     FAILED = "failed"
     BOUNCED = "bounced"
     DELIVERED = "delivered"
+
+
+# Create PostgreSQL ENUM types
+notification_channel_enum = PGENUM(
+    NotificationChannel,
+    name='notificationchannel',
+    create_type=False
+)
+
+notification_status_enum = PGENUM(
+    NotificationStatus,
+    name='notificationstatus',
+    create_type=False
+)
 
 
 class NotificationLog(Base):
@@ -75,8 +89,8 @@ class NotificationLog(Base):
     )
     
     # Notification details
-    channel: Mapped[str] = mapped_column(
-        String(20),
+    channel: Mapped[NotificationChannel] = mapped_column(
+        notification_channel_enum,
         nullable=False,
         index=True,
         comment="Channel used (email, sms, etc.)"
@@ -102,9 +116,9 @@ class NotificationLog(Base):
     )
     
     # Status tracking
-    status: Mapped[str] = mapped_column(
-        String(20),
-        default=NotificationStatus.PENDING.value,
+    status: Mapped[NotificationStatus] = mapped_column(
+        notification_status_enum,
+        default=NotificationStatus.PENDING,
         nullable=False,
         index=True,
         comment="Current delivery status"
@@ -175,15 +189,15 @@ class NotificationLog(Base):
     
     # Timestamps
     created_at: Mapped[datetime] = mapped_column(
-        default=datetime.now(timezone.utc),
+        default=lambda: datetime.now(timezone.utc),
         nullable=False,
         index=True,
         comment="When log entry was created"
     )
     
     updated_at: Mapped[datetime] = mapped_column(
-        default=datetime.now(timezone.utc),
-        onupdate=datetime.now(timezone.utc),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
         nullable=False,
         comment="Last update timestamp"
     )
@@ -229,16 +243,16 @@ class NotificationLog(Base):
     
     def mark_sent(self):
         """Mark notification as sent"""
-        self.status = NotificationStatus.SENT.value
+        self.status = NotificationStatus.SENT
         self.sent_at = datetime.now(timezone.utc)
     
     def mark_failed(self, error_message: str):
         """Mark notification as failed"""
-        self.status = NotificationStatus.FAILED.value
+        self.status = NotificationStatus.FAILED
         self.failed_at = datetime.now(timezone.utc)
         self.error_message = error_message
     
     def mark_delivered(self):
         """Mark notification as delivered"""
-        self.status = NotificationStatus.DELIVERED.value
+        self.status = NotificationStatus.DELIVERED
         self.delivered_at = datetime.now(timezone.utc)

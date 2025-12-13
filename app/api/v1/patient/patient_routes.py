@@ -390,7 +390,7 @@ async def update_regular_patient(
     current_user: User = Depends(require_staff_or_admin()),
 ):
     """
-    Update regular patient (Staff only).
+    Update regular patient (Staff or admin only).
 
     Args:
         patient_id: Patient UUID
