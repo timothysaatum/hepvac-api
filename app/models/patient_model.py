@@ -213,6 +213,19 @@ class Diagnosis(Base):
         return self.patient.name
 
 
+class Pregnancy(Base):
+    __tablename__ = "pregnancies"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        primary_key=True
+    )
+    expected_delivery_date: Mapped[Optional[date]] = mapped_column(
+        Date, nullable=True, index=True
+    )
+    actual_delivery_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+
+
 class PregnantPatient(Patient):
     """Pregnant patient model - inherits from Patient"""
 
