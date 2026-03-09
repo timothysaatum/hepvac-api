@@ -18,7 +18,8 @@ class UserService:
         self.repo = UserRepository(self.db)
 
     async def create_user(
-            self, user_data: UserCreateSchema, 
+            self, 
+            user_data: UserCreateSchema, 
             facility_id: Optional[uuid.UUID] = None
             ) -> User:
         """
@@ -38,7 +39,7 @@ class UserService:
         existing_user = await self.repo.get_user_by_username(user_data.username)
         if existing_user:
 
-            if existing_user.email in user_data:
+            if hasattr(user_data, "email") and existing_user.email == user_data.email:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail="Email already exists"
@@ -74,10 +75,10 @@ class UserService:
         self,
         username: str,
         password: str,
-        ip_address: str = None,
-        user_agent: str = None,
-        request: Request = None,
-        response: Response = None,
+        ip_address: str | None = None,
+        user_agent: str | None = None,
+        request: Request | None = None,
+        response: Response | None = None,
     ) -> Tuple[bool, Optional[User], Optional[str]]:
         """
         Login user with enhanced security features.
@@ -104,8 +105,14 @@ class UserService:
             return False, user, error_message
 
         # Create session for the authenticated user
+        if request is None:
+            raise ValueError("Request object is required for session creation")
+
         session = await SessionManager.create_session(
-            db=self.db, user_id=user.id, request=request, login_method="password"
+            db=self.db,
+            user_id=user.id,
+            request=request,
+            login_method="password"
         )
 
         # Create access token with session reference
@@ -114,15 +121,15 @@ class UserService:
         )
 
         # Create refresh token
-        refresh_token = TokenManager.create_refresh_token(user.id)
+        refresh_token = TokenManager.create_refresh_token(str(user.id))
 
         # Store refresh token in database
         await TokenManager.create_refresh_token_record(
             db=self.db,
             user_id=user.id,
             token=refresh_token,
-            device_info=user_agent,
-            ip_address=ip_address,
+            device_info=user_agent or "",
+            ip_address=ip_address or "",
         )
 
         # Set refresh token as HTTP-only cookie
@@ -137,7 +144,7 @@ class UserService:
 
     async def update_user_account(self, user_id: uuid.UUID, user_data: UserUpdateSchema):
 
-        user = await self.repo.get_user_by_id(user_id)
+        user = await self.repo.get_user_by_id(str(user_id))
 
         if not user:
             raise HTTPException(
@@ -155,7 +162,7 @@ class UserService:
         return updated_user
 
     async def delete_account(self, user_id: uuid.UUID):
-        user = await self.repo.get_user_by_id(user_id)
+        user = await self.repo.get_user_by_id(str(user_id))
 
         if not user:
             raise HTTPException(
@@ -169,9 +176,9 @@ class UserService:
 
     async def suspend_staff(self, user_id: uuid.UUID):
 
-        staff = await self.repo.get_user_by_id(user_id)
+        staff = await self.repo.get_user_by_id(str(user_id))
 
-        if staff:
+        if not staff:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="User with the given id not found"
@@ -194,7 +201,7 @@ class UserService:
 
     async def get_user_by_id(self, user_id: uuid.UUID) -> User:
 
-        user = await self.repo.get_user_by_id(user_id)
+        user = await self.repo.get_user_by_id(str(user_id))
         if not user:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -204,7 +211,7 @@ class UserService:
         return user
     
     async def delete_user(self, user_id: uuid.UUID) -> bool:
-        user = await self.repo.get_user_by_id(user_id)
+        user = await self.repo.get_user_by_id(str(user_id))
 
         if not user:
             raise HTTPException(

@@ -1,8 +1,8 @@
-"""create tables
+"""create initial tables
 
-Revision ID: 95935acf796f
+Revision ID: e0042e45a842
 Revises: 
-Create Date: 2025-12-09 04:16:47.021640
+Create Date: 2026-03-05 10:07:23.908507
 
 """
 from typing import Sequence, Union
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
-revision: str = '95935acf796f'
+revision: str = 'e0042e45a842'
 down_revision: Union[str, Sequence[str], None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -33,24 +33,34 @@ def upgrade() -> None:
     sa.ForeignKeyConstraint(['facility_manager_id'], ['users.id'], name='fk_facility_manager_id', ondelete='SET NULL', use_alter=True),
     sa.PrimaryKeyConstraint('id')
     )
-    op.create_index('idx_facility_manager_created', 'facilities', ['facility_manager_id', 'created_at'], unique=False)
-    op.create_index(op.f('ix_facilities_created_at'), 'facilities', ['created_at'], unique=False)
-    op.create_index(op.f('ix_facilities_email'), 'facilities', ['email'], unique=True)
-    op.create_index(op.f('ix_facilities_facility_manager_id'), 'facilities', ['facility_manager_id'], unique=False)
-    op.create_index(op.f('ix_facilities_facility_name'), 'facilities', ['facility_name'], unique=True)
-    op.create_index(op.f('ix_facilities_id'), 'facilities', ['id'], unique=True)
+    with op.batch_alter_table('facilities', schema=None) as batch_op:
+        batch_op.create_index('idx_facility_manager_created', ['facility_manager_id', 'created_at'], unique=False)
+        batch_op.create_index(batch_op.f('ix_facilities_created_at'), ['created_at'], unique=False)
+        batch_op.create_index(batch_op.f('ix_facilities_email'), ['email'], unique=True)
+        batch_op.create_index(batch_op.f('ix_facilities_facility_manager_id'), ['facility_manager_id'], unique=False)
+        batch_op.create_index(batch_op.f('ix_facilities_facility_name'), ['facility_name'], unique=True)
+        batch_op.create_index(batch_op.f('ix_facilities_id'), ['id'], unique=False)
+
     op.create_table('permissions',
     sa.Column('id', sa.Integer(), autoincrement=True, nullable=False),
     sa.Column('name', sa.String(length=96), nullable=False),
+    sa.Column('description', sa.String(length=255), nullable=True),
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
     sa.PrimaryKeyConstraint('id')
     )
-    op.create_index(op.f('ix_permissions_name'), 'permissions', ['name'], unique=True)
+    with op.batch_alter_table('permissions', schema=None) as batch_op:
+        batch_op.create_index(batch_op.f('ix_permissions_name'), ['name'], unique=True)
+
     op.create_table('roles',
     sa.Column('id', sa.Integer(), autoincrement=True, nullable=False),
     sa.Column('name', sa.String(length=64), nullable=False),
+    sa.Column('description', sa.String(length=255), nullable=True),
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
     sa.PrimaryKeyConstraint('id')
     )
-    op.create_index(op.f('ix_roles_name'), 'roles', ['name'], unique=True)
+    with op.batch_alter_table('roles', schema=None) as batch_op:
+        batch_op.create_index(batch_op.f('ix_roles_name'), ['name'], unique=True)
+
     op.create_table('users',
     sa.Column('id', sa.UUID(), nullable=False),
     sa.Column('username', sa.String(length=50), nullable=False),
@@ -62,7 +72,6 @@ def upgrade() -> None:
     sa.Column('is_suspended', sa.Boolean(), nullable=False),
     sa.Column('is_deleted', sa.Boolean(), nullable=False),
     sa.Column('deleted_at', sa.TIMESTAMP(timezone=True), nullable=True),
-    sa.Column('max_login_attempts', sa.Integer(), nullable=False),
     sa.Column('login_attempts', sa.Integer(), nullable=False),
     sa.Column('created_at', sa.TIMESTAMP(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
     sa.Column('updated_at', sa.TIMESTAMP(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
@@ -71,20 +80,24 @@ def upgrade() -> None:
     sa.ForeignKeyConstraint(['facility_id'], ['facilities.id'], name='fk_user_facility_id', ondelete='SET NULL', use_alter=True),
     sa.PrimaryKeyConstraint('id')
     )
-    op.create_index(op.f('ix_users_email'), 'users', ['email'], unique=True)
-    op.create_index(op.f('ix_users_id'), 'users', ['id'], unique=True)
-    op.create_index(op.f('ix_users_username'), 'users', ['username'], unique=True)
+    with op.batch_alter_table('users', schema=None) as batch_op:
+        batch_op.create_index(batch_op.f('ix_users_email'), ['email'], unique=True)
+        batch_op.create_index(batch_op.f('ix_users_id'), ['id'], unique=False)
+        batch_op.create_index(batch_op.f('ix_users_username'), ['username'], unique=True)
+
     op.create_table('geographic_restrictions',
     sa.Column('id', sa.UUID(), nullable=False),
     sa.Column('facility_id', sa.UUID(), nullable=True),
-    sa.Column('allowed_countries', sa.Text(), nullable=False),
-    sa.Column('blocked_countries', sa.Text(), nullable=True),
+    sa.Column('allowed_countries', sa.Text(), nullable=False, comment='JSON array of ISO country codes e.g. ["GH", "NG", "KE"]'),
+    sa.Column('blocked_countries', sa.Text(), nullable=True, comment='JSON array of ISO country codes to block'),
     sa.Column('is_active', sa.Boolean(), nullable=False),
     sa.Column('created_at', sa.TIMESTAMP(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
     sa.ForeignKeyConstraint(['facility_id'], ['facilities.id'], ondelete='CASCADE'),
     sa.PrimaryKeyConstraint('id')
     )
-    op.create_index(op.f('ix_geographic_restrictions_facility_id'), 'geographic_restrictions', ['facility_id'], unique=False)
+    with op.batch_alter_table('geographic_restrictions', schema=None) as batch_op:
+        batch_op.create_index(batch_op.f('ix_geographic_restrictions_facility_id'), ['facility_id'], unique=False)
+
     op.create_table('login_attempts',
     sa.Column('id', sa.UUID(), nullable=False),
     sa.Column('user_id', sa.UUID(), nullable=True),
@@ -100,12 +113,14 @@ def upgrade() -> None:
     sa.ForeignKeyConstraint(['user_id'], ['users.id'], ondelete='SET NULL'),
     sa.PrimaryKeyConstraint('id')
     )
-    op.create_index(op.f('ix_login_attempts_attempted_at'), 'login_attempts', ['attempted_at'], unique=False)
-    op.create_index(op.f('ix_login_attempts_device_fingerprint'), 'login_attempts', ['device_fingerprint'], unique=False)
-    op.create_index(op.f('ix_login_attempts_ip_address'), 'login_attempts', ['ip_address'], unique=False)
-    op.create_index(op.f('ix_login_attempts_success'), 'login_attempts', ['success'], unique=False)
-    op.create_index(op.f('ix_login_attempts_user_id'), 'login_attempts', ['user_id'], unique=False)
-    op.create_index(op.f('ix_login_attempts_username'), 'login_attempts', ['username'], unique=False)
+    with op.batch_alter_table('login_attempts', schema=None) as batch_op:
+        batch_op.create_index(batch_op.f('ix_login_attempts_attempted_at'), ['attempted_at'], unique=False)
+        batch_op.create_index(batch_op.f('ix_login_attempts_device_fingerprint'), ['device_fingerprint'], unique=False)
+        batch_op.create_index(batch_op.f('ix_login_attempts_ip_address'), ['ip_address'], unique=False)
+        batch_op.create_index(batch_op.f('ix_login_attempts_success'), ['success'], unique=False)
+        batch_op.create_index(batch_op.f('ix_login_attempts_user_id'), ['user_id'], unique=False)
+        batch_op.create_index(batch_op.f('ix_login_attempts_username'), ['username'], unique=False)
+
     op.create_table('notification_logs',
     sa.Column('id', sa.UUID(), nullable=False, comment='Unique notification log ID'),
     sa.Column('recipient_id', sa.UUID(), nullable=False, comment='ID of the recipient (patient/staff)'),
@@ -113,11 +128,11 @@ def upgrade() -> None:
     sa.Column('recipient_name', sa.String(length=255), nullable=False, comment='Name of recipient at time of sending'),
     sa.Column('recipient_email', sa.String(length=255), nullable=True, comment='Email address used'),
     sa.Column('recipient_phone', sa.String(length=20), nullable=True, comment='Phone number used'),
-    sa.Column('channel', sa.String(length=20), nullable=False, comment='Channel used (email, sms, etc.)'),
+    sa.Column('channel', postgresql.ENUM('EMAIL', 'SMS', 'PUSH', 'IN_APP', name='notificationchannel'), nullable=False, comment='Channel used (email, sms, etc.)'),
     sa.Column('subject', sa.String(length=255), nullable=True, comment='Email subject or SMS title'),
     sa.Column('message', sa.Text(), nullable=False, comment='Message content sent'),
     sa.Column('notification_type', sa.String(length=50), nullable=False, comment='Type of notification (reminder, alert, etc.)'),
-    sa.Column('status', sa.String(length=20), nullable=False, comment='Current delivery status'),
+    sa.Column('status', postgresql.ENUM('PENDING', 'SENT', 'FAILED', 'BOUNCED', 'DELIVERED', name='notificationstatus'), nullable=False, comment='Current delivery status'),
     sa.Column('sent_at', sa.DateTime(), nullable=True, comment='When notification was sent'),
     sa.Column('delivered_at', sa.DateTime(), nullable=True, comment='When notification was delivered (if tracked)'),
     sa.Column('failed_at', sa.DateTime(), nullable=True, comment='When notification failed'),
@@ -133,23 +148,24 @@ def upgrade() -> None:
     sa.ForeignKeyConstraint(['triggered_by_user_id'], ['users.id'], ondelete='SET NULL'),
     sa.PrimaryKeyConstraint('id')
     )
-    op.create_index('idx_notification_batch', 'notification_logs', ['batch_id', 'status'], unique=False)
-    op.create_index('idx_notification_recipient_date', 'notification_logs', ['recipient_id', 'sent_at'], unique=False)
-    op.create_index('idx_notification_status_channel', 'notification_logs', ['status', 'channel', 'created_at'], unique=False)
-    op.create_index('idx_notification_type_date', 'notification_logs', ['notification_type', 'sent_at'], unique=False)
-    op.create_index(op.f('ix_notification_logs_batch_id'), 'notification_logs', ['batch_id'], unique=False)
-    op.create_index(op.f('ix_notification_logs_channel'), 'notification_logs', ['channel'], unique=False)
-    op.create_index(op.f('ix_notification_logs_created_at'), 'notification_logs', ['created_at'], unique=False)
-    op.create_index(op.f('ix_notification_logs_notification_type'), 'notification_logs', ['notification_type'], unique=False)
-    op.create_index(op.f('ix_notification_logs_recipient_id'), 'notification_logs', ['recipient_id'], unique=False)
-    op.create_index(op.f('ix_notification_logs_sent_at'), 'notification_logs', ['sent_at'], unique=False)
-    op.create_index(op.f('ix_notification_logs_status'), 'notification_logs', ['status'], unique=False)
+    with op.batch_alter_table('notification_logs', schema=None) as batch_op:
+        batch_op.create_index('idx_notification_batch', ['batch_id', 'status'], unique=False)
+        batch_op.create_index('idx_notification_recipient_date', ['recipient_id', 'sent_at'], unique=False)
+        batch_op.create_index('idx_notification_status_channel', ['status', 'channel', 'created_at'], unique=False)
+        batch_op.create_index('idx_notification_type_date', ['notification_type', 'sent_at'], unique=False)
+        batch_op.create_index(batch_op.f('ix_notification_logs_batch_id'), ['batch_id'], unique=False)
+        batch_op.create_index(batch_op.f('ix_notification_logs_channel'), ['channel'], unique=False)
+        batch_op.create_index(batch_op.f('ix_notification_logs_created_at'), ['created_at'], unique=False)
+        batch_op.create_index(batch_op.f('ix_notification_logs_notification_type'), ['notification_type'], unique=False)
+        batch_op.create_index(batch_op.f('ix_notification_logs_recipient_id'), ['recipient_id'], unique=False)
+        batch_op.create_index(batch_op.f('ix_notification_logs_sent_at'), ['sent_at'], unique=False)
+        batch_op.create_index(batch_op.f('ix_notification_logs_status'), ['status'], unique=False)
+
     op.create_table('patients',
     sa.Column('id', sa.UUID(), nullable=False),
     sa.Column('name', sa.String(length=255), nullable=False),
     sa.Column('phone', sa.String(length=20), nullable=False),
     sa.Column('sex', postgresql.ENUM('MALE', 'FEMALE', name='sex'), nullable=False),
-    sa.Column('age', sa.Integer(), nullable=False),
     sa.Column('date_of_birth', sa.Date(), nullable=True),
     sa.Column('patient_type', postgresql.ENUM('REGULAR', 'PREGNANT', name='patienttype'), nullable=False),
     sa.Column('status', postgresql.ENUM('ACTIVE', 'POSTPARTUM', 'COMPLETED', 'INACTIVE', name='patientstatus'), nullable=False),
@@ -159,23 +175,25 @@ def upgrade() -> None:
     sa.Column('updated_by_id', sa.UUID(), nullable=True),
     sa.Column('updated_at', sa.TIMESTAMP(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
     sa.Column('is_deleted', sa.Boolean(), nullable=False),
-    sa.Column('accepts_messaging', sa.Boolean(), nullable=False),
     sa.Column('deleted_at', sa.TIMESTAMP(timezone=True), nullable=True),
+    sa.Column('accepts_messaging', sa.Boolean(), nullable=False),
     sa.ForeignKeyConstraint(['created_by_id'], ['users.id'], ondelete='SET NULL'),
     sa.ForeignKeyConstraint(['facility_id'], ['facilities.id'], ondelete='CASCADE'),
     sa.ForeignKeyConstraint(['updated_by_id'], ['users.id'], ondelete='SET NULL'),
     sa.PrimaryKeyConstraint('id')
     )
-    op.create_index(op.f('ix_patients_accepts_messaging'), 'patients', ['accepts_messaging'], unique=False)
-    op.create_index(op.f('ix_patients_created_by_id'), 'patients', ['created_by_id'], unique=False)
-    op.create_index(op.f('ix_patients_facility_id'), 'patients', ['facility_id'], unique=False)
-    op.create_index(op.f('ix_patients_id'), 'patients', ['id'], unique=True)
-    op.create_index(op.f('ix_patients_is_deleted'), 'patients', ['is_deleted'], unique=False)
-    op.create_index(op.f('ix_patients_name'), 'patients', ['name'], unique=False)
-    op.create_index(op.f('ix_patients_patient_type'), 'patients', ['patient_type'], unique=False)
-    op.create_index(op.f('ix_patients_phone'), 'patients', ['phone'], unique=False)
-    op.create_index(op.f('ix_patients_status'), 'patients', ['status'], unique=False)
-    op.create_index(op.f('ix_patients_updated_by_id'), 'patients', ['updated_by_id'], unique=False)
+    with op.batch_alter_table('patients', schema=None) as batch_op:
+        batch_op.create_index(batch_op.f('ix_patients_accepts_messaging'), ['accepts_messaging'], unique=False)
+        batch_op.create_index(batch_op.f('ix_patients_created_by_id'), ['created_by_id'], unique=False)
+        batch_op.create_index(batch_op.f('ix_patients_facility_id'), ['facility_id'], unique=False)
+        batch_op.create_index(batch_op.f('ix_patients_id'), ['id'], unique=False)
+        batch_op.create_index(batch_op.f('ix_patients_is_deleted'), ['is_deleted'], unique=False)
+        batch_op.create_index(batch_op.f('ix_patients_name'), ['name'], unique=False)
+        batch_op.create_index(batch_op.f('ix_patients_patient_type'), ['patient_type'], unique=False)
+        batch_op.create_index(batch_op.f('ix_patients_phone'), ['phone'], unique=False)
+        batch_op.create_index(batch_op.f('ix_patients_status'), ['status'], unique=False)
+        batch_op.create_index(batch_op.f('ix_patients_updated_by_id'), ['updated_by_id'], unique=False)
+
     op.create_table('refresh_tokens',
     sa.Column('id', sa.UUID(), nullable=False),
     sa.Column('user_id', sa.UUID(), nullable=False),
@@ -193,13 +211,16 @@ def upgrade() -> None:
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('token')
     )
-    op.create_index(op.f('ix_refresh_tokens_id'), 'refresh_tokens', ['id'], unique=True)
-    op.create_index(op.f('ix_refresh_tokens_user_id'), 'refresh_tokens', ['user_id'], unique=False)
+    with op.batch_alter_table('refresh_tokens', schema=None) as batch_op:
+        batch_op.create_index(batch_op.f('ix_refresh_tokens_id'), ['id'], unique=False)
+        batch_op.create_index(batch_op.f('ix_refresh_tokens_user_id'), ['user_id'], unique=False)
+
     op.create_table('role_permissions',
     sa.Column('role_id', sa.Integer(), nullable=False),
     sa.Column('permission_id', sa.Integer(), nullable=False),
-    sa.ForeignKeyConstraint(['permission_id'], ['permissions.id'], ),
-    sa.ForeignKeyConstraint(['role_id'], ['roles.id'], ),
+    sa.Column('assigned_at', sa.DateTime(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
+    sa.ForeignKeyConstraint(['permission_id'], ['permissions.id'], ondelete='CASCADE'),
+    sa.ForeignKeyConstraint(['role_id'], ['roles.id'], ondelete='CASCADE'),
     sa.PrimaryKeyConstraint('role_id', 'permission_id')
     )
     op.create_table('settings',
@@ -229,11 +250,13 @@ def upgrade() -> None:
     sa.ForeignKeyConstraint(['updated_by_id'], ['users.id'], ondelete='SET NULL'),
     sa.PrimaryKeyConstraint('id')
     )
-    op.create_index('idx_settings_status', 'settings', ['system_status'], unique=False)
-    op.create_index('idx_settings_updated', 'settings', ['updated_at'], unique=False)
-    op.create_index(op.f('ix_settings_notification_target'), 'settings', ['notification_target'], unique=False)
-    op.create_index(op.f('ix_settings_system_status'), 'settings', ['system_status'], unique=False)
-    op.create_index(op.f('ix_settings_updated_at'), 'settings', ['updated_at'], unique=False)
+    with op.batch_alter_table('settings', schema=None) as batch_op:
+        batch_op.create_index('idx_settings_status', ['system_status'], unique=False)
+        batch_op.create_index('idx_settings_updated', ['updated_at'], unique=False)
+        batch_op.create_index(batch_op.f('ix_settings_notification_target'), ['notification_target'], unique=False)
+        batch_op.create_index(batch_op.f('ix_settings_system_status'), ['system_status'], unique=False)
+        batch_op.create_index(batch_op.f('ix_settings_updated_at'), ['updated_at'], unique=False)
+
     op.create_table('trusted_devices',
     sa.Column('id', sa.UUID(), nullable=False),
     sa.Column('user_id', sa.UUID(), nullable=False),
@@ -254,15 +277,18 @@ def upgrade() -> None:
     sa.ForeignKeyConstraint(['user_id'], ['users.id'], ondelete='CASCADE'),
     sa.PrimaryKeyConstraint('id')
     )
-    op.create_index(op.f('ix_trusted_devices_device_fingerprint'), 'trusted_devices', ['device_fingerprint'], unique=True)
-    op.create_index(op.f('ix_trusted_devices_id'), 'trusted_devices', ['id'], unique=True)
-    op.create_index(op.f('ix_trusted_devices_status'), 'trusted_devices', ['status'], unique=False)
-    op.create_index(op.f('ix_trusted_devices_user_id'), 'trusted_devices', ['user_id'], unique=False)
+    with op.batch_alter_table('trusted_devices', schema=None) as batch_op:
+        batch_op.create_index(batch_op.f('ix_trusted_devices_device_fingerprint'), ['device_fingerprint'], unique=True)
+        batch_op.create_index(batch_op.f('ix_trusted_devices_id'), ['id'], unique=True)
+        batch_op.create_index(batch_op.f('ix_trusted_devices_status'), ['status'], unique=False)
+        batch_op.create_index(batch_op.f('ix_trusted_devices_user_id'), ['user_id'], unique=False)
+
     op.create_table('user_roles',
     sa.Column('user_id', sa.UUID(), nullable=False),
     sa.Column('role_id', sa.Integer(), nullable=False),
-    sa.ForeignKeyConstraint(['role_id'], ['roles.id'], ),
-    sa.ForeignKeyConstraint(['user_id'], ['users.id'], ),
+    sa.Column('assigned_at', sa.DateTime(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
+    sa.ForeignKeyConstraint(['role_id'], ['roles.id'], ondelete='CASCADE'),
+    sa.ForeignKeyConstraint(['user_id'], ['users.id'], ondelete='CASCADE'),
     sa.PrimaryKeyConstraint('user_id', 'role_id')
     )
     op.create_table('user_sessions',
@@ -274,21 +300,23 @@ def upgrade() -> None:
     sa.Column('session_token', sa.String(length=512), nullable=False),
     sa.Column('device_fingerprint', sa.String(length=255), nullable=True),
     sa.Column('login_method', sa.String(length=50), nullable=True),
-    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
-    sa.Column('expires_at', sa.DateTime(timezone=True), nullable=False),
-    sa.Column('is_expired', sa.Boolean(), nullable=False),
+    sa.Column('created_at', sa.TIMESTAMP(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
+    sa.Column('expires_at', sa.TIMESTAMP(timezone=True), nullable=False),
     sa.Column('is_active', sa.Boolean(), nullable=False),
+    sa.Column('is_expired', sa.Boolean(), nullable=False),
     sa.Column('is_suspicious', sa.Boolean(), nullable=False),
     sa.Column('last_active_at', sa.TIMESTAMP(timezone=True), nullable=True),
     sa.Column('is_terminated', sa.Boolean(), nullable=False),
-    sa.Column('is_terminated_at', sa.TIMESTAMP(timezone=True), nullable=True),
+    sa.Column('terminated_at', sa.TIMESTAMP(timezone=True), nullable=True),
     sa.Column('termination_reason', sa.String(length=255), nullable=True),
     sa.ForeignKeyConstraint(['user_id'], ['users.id'], ondelete='CASCADE'),
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('session_token')
     )
-    op.create_index(op.f('ix_user_sessions_id'), 'user_sessions', ['id'], unique=True)
-    op.create_index(op.f('ix_user_sessions_user_id'), 'user_sessions', ['user_id'], unique=False)
+    with op.batch_alter_table('user_sessions', schema=None) as batch_op:
+        batch_op.create_index(batch_op.f('ix_user_sessions_id'), ['id'], unique=False)
+        batch_op.create_index(batch_op.f('ix_user_sessions_user_id'), ['user_id'], unique=False)
+
     op.create_table('vaccines',
     sa.Column('id', sa.UUID(), nullable=False),
     sa.Column('vaccine_name', sa.String(length=100), nullable=False),
@@ -301,28 +329,32 @@ def upgrade() -> None:
     sa.ForeignKeyConstraint(['added_by_id'], ['users.id'], ondelete='SET NULL'),
     sa.PrimaryKeyConstraint('id')
     )
-    op.create_index(op.f('ix_vaccines_batch_number'), 'vaccines', ['batch_number'], unique=False)
-    op.create_index(op.f('ix_vaccines_id'), 'vaccines', ['id'], unique=True)
-    op.create_index(op.f('ix_vaccines_is_published'), 'vaccines', ['is_published'], unique=False)
-    op.create_index(op.f('ix_vaccines_vaccine_name'), 'vaccines', ['vaccine_name'], unique=False)
-    op.create_table('diagnosis',
+    with op.batch_alter_table('vaccines', schema=None) as batch_op:
+        batch_op.create_index(batch_op.f('ix_vaccines_batch_number'), ['batch_number'], unique=False)
+        batch_op.create_index(batch_op.f('ix_vaccines_id'), ['id'], unique=False)
+        batch_op.create_index(batch_op.f('ix_vaccines_is_published'), ['is_published'], unique=False)
+        batch_op.create_index(batch_op.f('ix_vaccines_vaccine_name'), ['vaccine_name'], unique=False)
+
+    op.create_table('diagnoses',
     sa.Column('id', sa.UUID(), nullable=False),
+    sa.Column('patient_id', sa.UUID(), nullable=False),
+    sa.Column('diagnosed_by_id', sa.UUID(), nullable=True),
     sa.Column('history', sa.Text(), nullable=True),
     sa.Column('preliminary_diagnosis', sa.Text(), nullable=True),
     sa.Column('actual_diagnosis', sa.Text(), nullable=True),
-    sa.Column('diagnose_by_id', sa.UUID(), nullable=True),
-    sa.Column('patient_id', sa.UUID(), nullable=False),
     sa.Column('is_deleted', sa.Boolean(), nullable=False),
     sa.Column('diagnosed_on', sa.TIMESTAMP(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
     sa.Column('updated_at', sa.TIMESTAMP(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
     sa.Column('deleted_at', sa.TIMESTAMP(timezone=True), nullable=True),
-    sa.ForeignKeyConstraint(['diagnose_by_id'], ['users.id'], ondelete='SET NULL'),
+    sa.ForeignKeyConstraint(['diagnosed_by_id'], ['users.id'], ondelete='SET NULL'),
     sa.ForeignKeyConstraint(['patient_id'], ['patients.id'], ondelete='CASCADE'),
     sa.PrimaryKeyConstraint('id')
     )
-    op.create_index(op.f('ix_diagnosis_id'), 'diagnosis', ['id'], unique=True)
-    op.create_index(op.f('ix_diagnosis_is_deleted'), 'diagnosis', ['is_deleted'], unique=False)
-    op.create_index(op.f('ix_diagnosis_patient_id'), 'diagnosis', ['patient_id'], unique=False)
+    with op.batch_alter_table('diagnoses', schema=None) as batch_op:
+        batch_op.create_index(batch_op.f('ix_diagnoses_id'), ['id'], unique=False)
+        batch_op.create_index(batch_op.f('ix_diagnoses_is_deleted'), ['is_deleted'], unique=False)
+        batch_op.create_index(batch_op.f('ix_diagnoses_patient_id'), ['patient_id'], unique=False)
+
     op.create_table('medication_schedules',
     sa.Column('id', sa.UUID(), nullable=False),
     sa.Column('patient_id', sa.UUID(), nullable=False),
@@ -337,15 +369,19 @@ def upgrade() -> None:
     sa.Column('lab_review_date', sa.Date(), nullable=True),
     sa.Column('lab_review_completed', sa.Boolean(), nullable=False),
     sa.Column('notes', sa.Text(), nullable=True),
+    sa.Column('updated_by_id', sa.UUID(), nullable=True),
     sa.Column('created_at', sa.TIMESTAMP(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
     sa.Column('updated_at', sa.TIMESTAMP(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
     sa.ForeignKeyConstraint(['patient_id'], ['patients.id'], ondelete='CASCADE'),
+    sa.ForeignKeyConstraint(['updated_by_id'], ['users.id'], ondelete='SET NULL'),
     sa.PrimaryKeyConstraint('id')
     )
-    op.create_index(op.f('ix_medication_schedules_id'), 'medication_schedules', ['id'], unique=True)
-    op.create_index(op.f('ix_medication_schedules_next_dose_due_date'), 'medication_schedules', ['next_dose_due_date'], unique=False)
-    op.create_index(op.f('ix_medication_schedules_patient_id'), 'medication_schedules', ['patient_id'], unique=False)
-    op.create_index(op.f('ix_medication_schedules_scheduled_date'), 'medication_schedules', ['scheduled_date'], unique=False)
+    with op.batch_alter_table('medication_schedules', schema=None) as batch_op:
+        batch_op.create_index(batch_op.f('ix_medication_schedules_id'), ['id'], unique=False)
+        batch_op.create_index(batch_op.f('ix_medication_schedules_next_dose_due_date'), ['next_dose_due_date'], unique=False)
+        batch_op.create_index(batch_op.f('ix_medication_schedules_patient_id'), ['patient_id'], unique=False)
+        batch_op.create_index(batch_op.f('ix_medication_schedules_scheduled_date'), ['scheduled_date'], unique=False)
+
     op.create_table('patient_vaccine_purchases',
     sa.Column('id', sa.UUID(), nullable=False),
     sa.Column('patient_id', sa.UUID(), nullable=False),
@@ -364,34 +400,34 @@ def upgrade() -> None:
     sa.Column('created_by_id', sa.UUID(), nullable=True),
     sa.Column('created_at', sa.TIMESTAMP(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
     sa.Column('updated_at', sa.TIMESTAMP(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
+    sa.CheckConstraint('price_per_dose >= 0', name='ck_price_per_dose_non_negative'),
+    sa.CheckConstraint('total_doses > 0', name='ck_total_doses_positive'),
     sa.ForeignKeyConstraint(['created_by_id'], ['users.id'], ondelete='SET NULL'),
     sa.ForeignKeyConstraint(['patient_id'], ['patients.id'], ondelete='CASCADE'),
     sa.ForeignKeyConstraint(['vaccine_id'], ['vaccines.id'], ondelete='RESTRICT'),
     sa.PrimaryKeyConstraint('id')
     )
-    op.create_index(op.f('ix_patient_vaccine_purchases_batch_number'), 'patient_vaccine_purchases', ['batch_number'], unique=False)
-    op.create_index(op.f('ix_patient_vaccine_purchases_id'), 'patient_vaccine_purchases', ['id'], unique=True)
-    op.create_index(op.f('ix_patient_vaccine_purchases_is_active'), 'patient_vaccine_purchases', ['is_active'], unique=False)
-    op.create_index(op.f('ix_patient_vaccine_purchases_patient_id'), 'patient_vaccine_purchases', ['patient_id'], unique=False)
-    op.create_index(op.f('ix_patient_vaccine_purchases_payment_status'), 'patient_vaccine_purchases', ['payment_status'], unique=False)
-    op.create_index(op.f('ix_patient_vaccine_purchases_vaccine_id'), 'patient_vaccine_purchases', ['vaccine_id'], unique=False)
+    with op.batch_alter_table('patient_vaccine_purchases', schema=None) as batch_op:
+        batch_op.create_index(batch_op.f('ix_patient_vaccine_purchases_batch_number'), ['batch_number'], unique=False)
+        batch_op.create_index(batch_op.f('ix_patient_vaccine_purchases_id'), ['id'], unique=False)
+        batch_op.create_index(batch_op.f('ix_patient_vaccine_purchases_is_active'), ['is_active'], unique=False)
+        batch_op.create_index(batch_op.f('ix_patient_vaccine_purchases_patient_id'), ['patient_id'], unique=False)
+        batch_op.create_index(batch_op.f('ix_patient_vaccine_purchases_payment_status'), ['payment_status'], unique=False)
+        batch_op.create_index(batch_op.f('ix_patient_vaccine_purchases_vaccine_id'), ['vaccine_id'], unique=False)
+        batch_op.create_index('uix_one_active_purchase_per_patient_vaccine', ['patient_id', 'vaccine_id'], unique=True, postgresql_where='is_active = TRUE')
+
     op.create_table('pregnant_patients',
     sa.Column('id', sa.UUID(), nullable=False),
-    sa.Column('expected_delivery_date', sa.Date(), nullable=True),
-    sa.Column('actual_delivery_date', sa.Date(), nullable=True),
-    sa.Column('gestational_age_weeks', sa.Integer(), nullable=True),
-    sa.Column('gravida', sa.Integer(), nullable=True),
-    sa.Column('para', sa.Integer(), nullable=True),
-    sa.Column('risk_factors', sa.Text(), nullable=True),
-    sa.Column('notes', sa.Text(), nullable=True),
+    sa.Column('gravida', sa.Integer(), server_default='1', nullable=False),
+    sa.Column('para', sa.Integer(), nullable=False),
     sa.ForeignKeyConstraint(['id'], ['patients.id'], ondelete='CASCADE'),
     sa.PrimaryKeyConstraint('id')
     )
-    op.create_index(op.f('ix_pregnant_patients_expected_delivery_date'), 'pregnant_patients', ['expected_delivery_date'], unique=False)
     op.create_table('prescriptions',
     sa.Column('id', sa.UUID(), nullable=False),
     sa.Column('patient_id', sa.UUID(), nullable=False),
     sa.Column('prescribed_by_id', sa.UUID(), nullable=True),
+    sa.Column('updated_by_id', sa.UUID(), nullable=True),
     sa.Column('medication_name', sa.String(length=255), nullable=False),
     sa.Column('dosage', sa.String(length=100), nullable=False),
     sa.Column('frequency', sa.String(length=100), nullable=False),
@@ -405,11 +441,14 @@ def upgrade() -> None:
     sa.Column('updated_at', sa.TIMESTAMP(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
     sa.ForeignKeyConstraint(['patient_id'], ['patients.id'], ondelete='CASCADE'),
     sa.ForeignKeyConstraint(['prescribed_by_id'], ['users.id'], ondelete='SET NULL'),
+    sa.ForeignKeyConstraint(['updated_by_id'], ['users.id'], ondelete='SET NULL'),
     sa.PrimaryKeyConstraint('id')
     )
-    op.create_index(op.f('ix_prescriptions_id'), 'prescriptions', ['id'], unique=True)
-    op.create_index(op.f('ix_prescriptions_patient_id'), 'prescriptions', ['patient_id'], unique=False)
-    op.create_index(op.f('ix_prescriptions_prescription_date'), 'prescriptions', ['prescription_date'], unique=False)
+    with op.batch_alter_table('prescriptions', schema=None) as batch_op:
+        batch_op.create_index(batch_op.f('ix_prescriptions_id'), ['id'], unique=False)
+        batch_op.create_index(batch_op.f('ix_prescriptions_patient_id'), ['patient_id'], unique=False)
+        batch_op.create_index(batch_op.f('ix_prescriptions_prescription_date'), ['prescription_date'], unique=False)
+
     op.create_table('regular_patients',
     sa.Column('id', sa.UUID(), nullable=False),
     sa.Column('diagnosis_date', sa.Date(), nullable=True),
@@ -423,28 +462,10 @@ def upgrade() -> None:
     sa.ForeignKeyConstraint(['id'], ['patients.id'], ondelete='CASCADE'),
     sa.PrimaryKeyConstraint('id')
     )
-    op.create_table('children',
-    sa.Column('id', sa.UUID(), nullable=False),
-    sa.Column('mother_id', sa.UUID(), nullable=False),
-    sa.Column('name', sa.String(length=255), nullable=True),
-    sa.Column('date_of_birth', sa.Date(), nullable=False),
-    sa.Column('sex', postgresql.ENUM('MALE', 'FEMALE', name='sex'), nullable=True),
-    sa.Column('six_month_checkup_date', sa.Date(), nullable=True),
-    sa.Column('six_month_checkup_completed', sa.Boolean(), nullable=False),
-    sa.Column('hep_b_antibody_test_result', sa.String(length=100), nullable=True),
-    sa.Column('test_date', sa.Date(), nullable=True),
-    sa.Column('notes', sa.Text(), nullable=True),
-    sa.Column('created_at', sa.TIMESTAMP(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
-    sa.Column('updated_at', sa.TIMESTAMP(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
-    sa.ForeignKeyConstraint(['mother_id'], ['pregnant_patients.id'], ondelete='CASCADE'),
-    sa.PrimaryKeyConstraint('id')
-    )
-    op.create_index(op.f('ix_children_date_of_birth'), 'children', ['date_of_birth'], unique=False)
-    op.create_index(op.f('ix_children_id'), 'children', ['id'], unique=True)
-    op.create_index(op.f('ix_children_mother_id'), 'children', ['mother_id'], unique=False)
     op.create_table('payments',
     sa.Column('id', sa.UUID(), nullable=False),
     sa.Column('vaccine_purchase_id', sa.UUID(), nullable=False),
+    sa.Column('patient_id', sa.UUID(), nullable=False),
     sa.Column('amount', sa.Numeric(precision=10, scale=2), nullable=False),
     sa.Column('payment_date', sa.Date(), nullable=False),
     sa.Column('payment_method', sa.String(length=50), nullable=True),
@@ -452,13 +473,43 @@ def upgrade() -> None:
     sa.Column('notes', sa.Text(), nullable=True),
     sa.Column('received_by_id', sa.UUID(), nullable=True),
     sa.Column('created_at', sa.TIMESTAMP(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
+    sa.ForeignKeyConstraint(['patient_id'], ['patients.id'], ondelete='CASCADE'),
     sa.ForeignKeyConstraint(['received_by_id'], ['users.id'], ondelete='SET NULL'),
     sa.ForeignKeyConstraint(['vaccine_purchase_id'], ['patient_vaccine_purchases.id'], ondelete='CASCADE'),
     sa.PrimaryKeyConstraint('id')
     )
-    op.create_index(op.f('ix_payments_id'), 'payments', ['id'], unique=True)
-    op.create_index(op.f('ix_payments_payment_date'), 'payments', ['payment_date'], unique=False)
-    op.create_index(op.f('ix_payments_vaccine_purchase_id'), 'payments', ['vaccine_purchase_id'], unique=False)
+    with op.batch_alter_table('payments', schema=None) as batch_op:
+        batch_op.create_index(batch_op.f('ix_payments_id'), ['id'], unique=False)
+        batch_op.create_index(batch_op.f('ix_payments_patient_id'), ['patient_id'], unique=False)
+        batch_op.create_index(batch_op.f('ix_payments_payment_date'), ['payment_date'], unique=False)
+        batch_op.create_index(batch_op.f('ix_payments_vaccine_purchase_id'), ['vaccine_purchase_id'], unique=False)
+
+    op.create_table('pregnancies',
+    sa.Column('id', sa.UUID(), nullable=False),
+    sa.Column('patient_id', sa.UUID(), nullable=False),
+    sa.Column('pregnancy_number', sa.Integer(), nullable=False),
+    sa.Column('lmp_date', sa.Date(), nullable=True),
+    sa.Column('expected_delivery_date', sa.Date(), nullable=True),
+    sa.Column('actual_delivery_date', sa.Date(), nullable=True),
+    sa.Column('gestational_age_weeks', sa.Integer(), nullable=True),
+    sa.Column('risk_factors', sa.Text(), nullable=True),
+    sa.Column('notes', sa.Text(), nullable=True),
+    sa.Column('outcome', postgresql.ENUM('LIVE_BIRTH', 'STILLBIRTH', 'MISCARRIAGE', 'ABORTION', 'ECTOPIC', name='pregnancy_outcome'), nullable=True),
+    sa.Column('is_active', sa.Boolean(), nullable=False),
+    sa.Column('created_at', sa.TIMESTAMP(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
+    sa.Column('updated_at', sa.TIMESTAMP(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
+    sa.CheckConstraint('pregnancy_number > 0', name='ck_pregnancy_number_positive'),
+    sa.ForeignKeyConstraint(['patient_id'], ['pregnant_patients.id'], ondelete='CASCADE'),
+    sa.PrimaryKeyConstraint('id'),
+    sa.UniqueConstraint('patient_id', 'pregnancy_number', name='uq_patient_pregnancy_number')
+    )
+    with op.batch_alter_table('pregnancies', schema=None) as batch_op:
+        batch_op.create_index(batch_op.f('ix_pregnancies_expected_delivery_date'), ['expected_delivery_date'], unique=False)
+        batch_op.create_index(batch_op.f('ix_pregnancies_id'), ['id'], unique=False)
+        batch_op.create_index(batch_op.f('ix_pregnancies_is_active'), ['is_active'], unique=False)
+        batch_op.create_index(batch_op.f('ix_pregnancies_patient_id'), ['patient_id'], unique=False)
+        batch_op.create_index('uix_one_active_pregnancy_per_patient', ['patient_id'], unique=True, postgresql_where='is_active = TRUE')
+
     op.create_table('vaccinations',
     sa.Column('id', sa.UUID(), nullable=False),
     sa.Column('patient_id', sa.UUID(), nullable=False),
@@ -476,11 +527,34 @@ def upgrade() -> None:
     sa.ForeignKeyConstraint(['vaccine_purchase_id'], ['patient_vaccine_purchases.id'], ondelete='CASCADE'),
     sa.PrimaryKeyConstraint('id')
     )
-    op.create_index(op.f('ix_vaccinations_dose_date'), 'vaccinations', ['dose_date'], unique=False)
-    op.create_index(op.f('ix_vaccinations_dose_number'), 'vaccinations', ['dose_number'], unique=False)
-    op.create_index(op.f('ix_vaccinations_id'), 'vaccinations', ['id'], unique=True)
-    op.create_index(op.f('ix_vaccinations_patient_id'), 'vaccinations', ['patient_id'], unique=False)
-    op.create_index(op.f('ix_vaccinations_vaccine_purchase_id'), 'vaccinations', ['vaccine_purchase_id'], unique=False)
+    with op.batch_alter_table('vaccinations', schema=None) as batch_op:
+        batch_op.create_index(batch_op.f('ix_vaccinations_dose_date'), ['dose_date'], unique=False)
+        batch_op.create_index(batch_op.f('ix_vaccinations_dose_number'), ['dose_number'], unique=False)
+        batch_op.create_index(batch_op.f('ix_vaccinations_id'), ['id'], unique=False)
+        batch_op.create_index(batch_op.f('ix_vaccinations_patient_id'), ['patient_id'], unique=False)
+        batch_op.create_index(batch_op.f('ix_vaccinations_vaccine_purchase_id'), ['vaccine_purchase_id'], unique=False)
+
+    op.create_table('children',
+    sa.Column('id', sa.UUID(), nullable=False),
+    sa.Column('pregnancy_id', sa.UUID(), nullable=False),
+    sa.Column('name', sa.String(length=255), nullable=True),
+    sa.Column('date_of_birth', sa.Date(), nullable=False),
+    sa.Column('sex', postgresql.ENUM('MALE', 'FEMALE', name='sex'), nullable=True),
+    sa.Column('six_month_checkup_date', sa.Date(), nullable=True),
+    sa.Column('six_month_checkup_completed', sa.Boolean(), nullable=False),
+    sa.Column('hep_b_antibody_test_result', sa.String(length=100), nullable=True),
+    sa.Column('test_date', sa.Date(), nullable=True),
+    sa.Column('notes', sa.Text(), nullable=True),
+    sa.Column('created_at', sa.TIMESTAMP(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
+    sa.Column('updated_at', sa.TIMESTAMP(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
+    sa.ForeignKeyConstraint(['pregnancy_id'], ['pregnancies.id'], ondelete='CASCADE'),
+    sa.PrimaryKeyConstraint('id')
+    )
+    with op.batch_alter_table('children', schema=None) as batch_op:
+        batch_op.create_index(batch_op.f('ix_children_date_of_birth'), ['date_of_birth'], unique=False)
+        batch_op.create_index(batch_op.f('ix_children_id'), ['id'], unique=False)
+        batch_op.create_index(batch_op.f('ix_children_pregnancy_id'), ['pregnancy_id'], unique=False)
+
     op.create_table('patient_reminders',
     sa.Column('id', sa.UUID(), nullable=False),
     sa.Column('patient_id', sa.UUID(), nullable=False),
@@ -496,129 +570,182 @@ def upgrade() -> None:
     sa.ForeignKeyConstraint(['patient_id'], ['patients.id'], ondelete='CASCADE'),
     sa.PrimaryKeyConstraint('id')
     )
-    op.create_index(op.f('ix_patient_reminders_id'), 'patient_reminders', ['id'], unique=True)
-    op.create_index(op.f('ix_patient_reminders_patient_id'), 'patient_reminders', ['patient_id'], unique=False)
-    op.create_index(op.f('ix_patient_reminders_reminder_type'), 'patient_reminders', ['reminder_type'], unique=False)
-    op.create_index(op.f('ix_patient_reminders_scheduled_date'), 'patient_reminders', ['scheduled_date'], unique=False)
-    op.create_index(op.f('ix_patient_reminders_status'), 'patient_reminders', ['status'], unique=False)
+    with op.batch_alter_table('patient_reminders', schema=None) as batch_op:
+        batch_op.create_index(batch_op.f('ix_patient_reminders_id'), ['id'], unique=False)
+        batch_op.create_index(batch_op.f('ix_patient_reminders_patient_id'), ['patient_id'], unique=False)
+        batch_op.create_index(batch_op.f('ix_patient_reminders_reminder_type'), ['reminder_type'], unique=False)
+        batch_op.create_index(batch_op.f('ix_patient_reminders_scheduled_date'), ['scheduled_date'], unique=False)
+        batch_op.create_index(batch_op.f('ix_patient_reminders_status'), ['status'], unique=False)
+
     # ### end Alembic commands ###
 
 
 def downgrade() -> None:
     """Downgrade schema."""
     # ### commands auto generated by Alembic - please adjust! ###
-    op.drop_index(op.f('ix_patient_reminders_status'), table_name='patient_reminders')
-    op.drop_index(op.f('ix_patient_reminders_scheduled_date'), table_name='patient_reminders')
-    op.drop_index(op.f('ix_patient_reminders_reminder_type'), table_name='patient_reminders')
-    op.drop_index(op.f('ix_patient_reminders_patient_id'), table_name='patient_reminders')
-    op.drop_index(op.f('ix_patient_reminders_id'), table_name='patient_reminders')
+    with op.batch_alter_table('patient_reminders', schema=None) as batch_op:
+        batch_op.drop_index(batch_op.f('ix_patient_reminders_status'))
+        batch_op.drop_index(batch_op.f('ix_patient_reminders_scheduled_date'))
+        batch_op.drop_index(batch_op.f('ix_patient_reminders_reminder_type'))
+        batch_op.drop_index(batch_op.f('ix_patient_reminders_patient_id'))
+        batch_op.drop_index(batch_op.f('ix_patient_reminders_id'))
+
     op.drop_table('patient_reminders')
-    op.drop_index(op.f('ix_vaccinations_vaccine_purchase_id'), table_name='vaccinations')
-    op.drop_index(op.f('ix_vaccinations_patient_id'), table_name='vaccinations')
-    op.drop_index(op.f('ix_vaccinations_id'), table_name='vaccinations')
-    op.drop_index(op.f('ix_vaccinations_dose_number'), table_name='vaccinations')
-    op.drop_index(op.f('ix_vaccinations_dose_date'), table_name='vaccinations')
-    op.drop_table('vaccinations')
-    op.drop_index(op.f('ix_payments_vaccine_purchase_id'), table_name='payments')
-    op.drop_index(op.f('ix_payments_payment_date'), table_name='payments')
-    op.drop_index(op.f('ix_payments_id'), table_name='payments')
-    op.drop_table('payments')
-    op.drop_index(op.f('ix_children_mother_id'), table_name='children')
-    op.drop_index(op.f('ix_children_id'), table_name='children')
-    op.drop_index(op.f('ix_children_date_of_birth'), table_name='children')
+    with op.batch_alter_table('children', schema=None) as batch_op:
+        batch_op.drop_index(batch_op.f('ix_children_pregnancy_id'))
+        batch_op.drop_index(batch_op.f('ix_children_id'))
+        batch_op.drop_index(batch_op.f('ix_children_date_of_birth'))
+
     op.drop_table('children')
+    with op.batch_alter_table('vaccinations', schema=None) as batch_op:
+        batch_op.drop_index(batch_op.f('ix_vaccinations_vaccine_purchase_id'))
+        batch_op.drop_index(batch_op.f('ix_vaccinations_patient_id'))
+        batch_op.drop_index(batch_op.f('ix_vaccinations_id'))
+        batch_op.drop_index(batch_op.f('ix_vaccinations_dose_number'))
+        batch_op.drop_index(batch_op.f('ix_vaccinations_dose_date'))
+
+    op.drop_table('vaccinations')
+    with op.batch_alter_table('pregnancies', schema=None) as batch_op:
+        batch_op.drop_index('uix_one_active_pregnancy_per_patient', postgresql_where='is_active = TRUE')
+        batch_op.drop_index(batch_op.f('ix_pregnancies_patient_id'))
+        batch_op.drop_index(batch_op.f('ix_pregnancies_is_active'))
+        batch_op.drop_index(batch_op.f('ix_pregnancies_id'))
+        batch_op.drop_index(batch_op.f('ix_pregnancies_expected_delivery_date'))
+
+    op.drop_table('pregnancies')
+    with op.batch_alter_table('payments', schema=None) as batch_op:
+        batch_op.drop_index(batch_op.f('ix_payments_vaccine_purchase_id'))
+        batch_op.drop_index(batch_op.f('ix_payments_payment_date'))
+        batch_op.drop_index(batch_op.f('ix_payments_patient_id'))
+        batch_op.drop_index(batch_op.f('ix_payments_id'))
+
+    op.drop_table('payments')
     op.drop_table('regular_patients')
-    op.drop_index(op.f('ix_prescriptions_prescription_date'), table_name='prescriptions')
-    op.drop_index(op.f('ix_prescriptions_patient_id'), table_name='prescriptions')
-    op.drop_index(op.f('ix_prescriptions_id'), table_name='prescriptions')
+    with op.batch_alter_table('prescriptions', schema=None) as batch_op:
+        batch_op.drop_index(batch_op.f('ix_prescriptions_prescription_date'))
+        batch_op.drop_index(batch_op.f('ix_prescriptions_patient_id'))
+        batch_op.drop_index(batch_op.f('ix_prescriptions_id'))
+
     op.drop_table('prescriptions')
-    op.drop_index(op.f('ix_pregnant_patients_expected_delivery_date'), table_name='pregnant_patients')
     op.drop_table('pregnant_patients')
-    op.drop_index(op.f('ix_patient_vaccine_purchases_vaccine_id'), table_name='patient_vaccine_purchases')
-    op.drop_index(op.f('ix_patient_vaccine_purchases_payment_status'), table_name='patient_vaccine_purchases')
-    op.drop_index(op.f('ix_patient_vaccine_purchases_patient_id'), table_name='patient_vaccine_purchases')
-    op.drop_index(op.f('ix_patient_vaccine_purchases_is_active'), table_name='patient_vaccine_purchases')
-    op.drop_index(op.f('ix_patient_vaccine_purchases_id'), table_name='patient_vaccine_purchases')
-    op.drop_index(op.f('ix_patient_vaccine_purchases_batch_number'), table_name='patient_vaccine_purchases')
+    with op.batch_alter_table('patient_vaccine_purchases', schema=None) as batch_op:
+        batch_op.drop_index('uix_one_active_purchase_per_patient_vaccine', postgresql_where='is_active = TRUE')
+        batch_op.drop_index(batch_op.f('ix_patient_vaccine_purchases_vaccine_id'))
+        batch_op.drop_index(batch_op.f('ix_patient_vaccine_purchases_payment_status'))
+        batch_op.drop_index(batch_op.f('ix_patient_vaccine_purchases_patient_id'))
+        batch_op.drop_index(batch_op.f('ix_patient_vaccine_purchases_is_active'))
+        batch_op.drop_index(batch_op.f('ix_patient_vaccine_purchases_id'))
+        batch_op.drop_index(batch_op.f('ix_patient_vaccine_purchases_batch_number'))
+
     op.drop_table('patient_vaccine_purchases')
-    op.drop_index(op.f('ix_medication_schedules_scheduled_date'), table_name='medication_schedules')
-    op.drop_index(op.f('ix_medication_schedules_patient_id'), table_name='medication_schedules')
-    op.drop_index(op.f('ix_medication_schedules_next_dose_due_date'), table_name='medication_schedules')
-    op.drop_index(op.f('ix_medication_schedules_id'), table_name='medication_schedules')
+    with op.batch_alter_table('medication_schedules', schema=None) as batch_op:
+        batch_op.drop_index(batch_op.f('ix_medication_schedules_scheduled_date'))
+        batch_op.drop_index(batch_op.f('ix_medication_schedules_patient_id'))
+        batch_op.drop_index(batch_op.f('ix_medication_schedules_next_dose_due_date'))
+        batch_op.drop_index(batch_op.f('ix_medication_schedules_id'))
+
     op.drop_table('medication_schedules')
-    op.drop_index(op.f('ix_diagnosis_patient_id'), table_name='diagnosis')
-    op.drop_index(op.f('ix_diagnosis_is_deleted'), table_name='diagnosis')
-    op.drop_index(op.f('ix_diagnosis_id'), table_name='diagnosis')
-    op.drop_table('diagnosis')
-    op.drop_index(op.f('ix_vaccines_vaccine_name'), table_name='vaccines')
-    op.drop_index(op.f('ix_vaccines_is_published'), table_name='vaccines')
-    op.drop_index(op.f('ix_vaccines_id'), table_name='vaccines')
-    op.drop_index(op.f('ix_vaccines_batch_number'), table_name='vaccines')
+    with op.batch_alter_table('diagnoses', schema=None) as batch_op:
+        batch_op.drop_index(batch_op.f('ix_diagnoses_patient_id'))
+        batch_op.drop_index(batch_op.f('ix_diagnoses_is_deleted'))
+        batch_op.drop_index(batch_op.f('ix_diagnoses_id'))
+
+    op.drop_table('diagnoses')
+    with op.batch_alter_table('vaccines', schema=None) as batch_op:
+        batch_op.drop_index(batch_op.f('ix_vaccines_vaccine_name'))
+        batch_op.drop_index(batch_op.f('ix_vaccines_is_published'))
+        batch_op.drop_index(batch_op.f('ix_vaccines_id'))
+        batch_op.drop_index(batch_op.f('ix_vaccines_batch_number'))
+
     op.drop_table('vaccines')
-    op.drop_index(op.f('ix_user_sessions_user_id'), table_name='user_sessions')
-    op.drop_index(op.f('ix_user_sessions_id'), table_name='user_sessions')
+    with op.batch_alter_table('user_sessions', schema=None) as batch_op:
+        batch_op.drop_index(batch_op.f('ix_user_sessions_user_id'))
+        batch_op.drop_index(batch_op.f('ix_user_sessions_id'))
+
     op.drop_table('user_sessions')
     op.drop_table('user_roles')
-    op.drop_index(op.f('ix_trusted_devices_user_id'), table_name='trusted_devices')
-    op.drop_index(op.f('ix_trusted_devices_status'), table_name='trusted_devices')
-    op.drop_index(op.f('ix_trusted_devices_id'), table_name='trusted_devices')
-    op.drop_index(op.f('ix_trusted_devices_device_fingerprint'), table_name='trusted_devices')
+    with op.batch_alter_table('trusted_devices', schema=None) as batch_op:
+        batch_op.drop_index(batch_op.f('ix_trusted_devices_user_id'))
+        batch_op.drop_index(batch_op.f('ix_trusted_devices_status'))
+        batch_op.drop_index(batch_op.f('ix_trusted_devices_id'))
+        batch_op.drop_index(batch_op.f('ix_trusted_devices_device_fingerprint'))
+
     op.drop_table('trusted_devices')
-    op.drop_index(op.f('ix_settings_updated_at'), table_name='settings')
-    op.drop_index(op.f('ix_settings_system_status'), table_name='settings')
-    op.drop_index(op.f('ix_settings_notification_target'), table_name='settings')
-    op.drop_index('idx_settings_updated', table_name='settings')
-    op.drop_index('idx_settings_status', table_name='settings')
+    with op.batch_alter_table('settings', schema=None) as batch_op:
+        batch_op.drop_index(batch_op.f('ix_settings_updated_at'))
+        batch_op.drop_index(batch_op.f('ix_settings_system_status'))
+        batch_op.drop_index(batch_op.f('ix_settings_notification_target'))
+        batch_op.drop_index('idx_settings_updated')
+        batch_op.drop_index('idx_settings_status')
+
     op.drop_table('settings')
     op.drop_table('role_permissions')
-    op.drop_index(op.f('ix_refresh_tokens_user_id'), table_name='refresh_tokens')
-    op.drop_index(op.f('ix_refresh_tokens_id'), table_name='refresh_tokens')
+    with op.batch_alter_table('refresh_tokens', schema=None) as batch_op:
+        batch_op.drop_index(batch_op.f('ix_refresh_tokens_user_id'))
+        batch_op.drop_index(batch_op.f('ix_refresh_tokens_id'))
+
     op.drop_table('refresh_tokens')
-    op.drop_index(op.f('ix_patients_updated_by_id'), table_name='patients')
-    op.drop_index(op.f('ix_patients_status'), table_name='patients')
-    op.drop_index(op.f('ix_patients_phone'), table_name='patients')
-    op.drop_index(op.f('ix_patients_patient_type'), table_name='patients')
-    op.drop_index(op.f('ix_patients_name'), table_name='patients')
-    op.drop_index(op.f('ix_patients_is_deleted'), table_name='patients')
-    op.drop_index(op.f('ix_patients_id'), table_name='patients')
-    op.drop_index(op.f('ix_patients_facility_id'), table_name='patients')
-    op.drop_index(op.f('ix_patients_created_by_id'), table_name='patients')
-    op.drop_index(op.f('ix_patients_accepts_messaging'), table_name='patients')
+    with op.batch_alter_table('patients', schema=None) as batch_op:
+        batch_op.drop_index(batch_op.f('ix_patients_updated_by_id'))
+        batch_op.drop_index(batch_op.f('ix_patients_status'))
+        batch_op.drop_index(batch_op.f('ix_patients_phone'))
+        batch_op.drop_index(batch_op.f('ix_patients_patient_type'))
+        batch_op.drop_index(batch_op.f('ix_patients_name'))
+        batch_op.drop_index(batch_op.f('ix_patients_is_deleted'))
+        batch_op.drop_index(batch_op.f('ix_patients_id'))
+        batch_op.drop_index(batch_op.f('ix_patients_facility_id'))
+        batch_op.drop_index(batch_op.f('ix_patients_created_by_id'))
+        batch_op.drop_index(batch_op.f('ix_patients_accepts_messaging'))
+
     op.drop_table('patients')
-    op.drop_index(op.f('ix_notification_logs_status'), table_name='notification_logs')
-    op.drop_index(op.f('ix_notification_logs_sent_at'), table_name='notification_logs')
-    op.drop_index(op.f('ix_notification_logs_recipient_id'), table_name='notification_logs')
-    op.drop_index(op.f('ix_notification_logs_notification_type'), table_name='notification_logs')
-    op.drop_index(op.f('ix_notification_logs_created_at'), table_name='notification_logs')
-    op.drop_index(op.f('ix_notification_logs_channel'), table_name='notification_logs')
-    op.drop_index(op.f('ix_notification_logs_batch_id'), table_name='notification_logs')
-    op.drop_index('idx_notification_type_date', table_name='notification_logs')
-    op.drop_index('idx_notification_status_channel', table_name='notification_logs')
-    op.drop_index('idx_notification_recipient_date', table_name='notification_logs')
-    op.drop_index('idx_notification_batch', table_name='notification_logs')
+    with op.batch_alter_table('notification_logs', schema=None) as batch_op:
+        batch_op.drop_index(batch_op.f('ix_notification_logs_status'))
+        batch_op.drop_index(batch_op.f('ix_notification_logs_sent_at'))
+        batch_op.drop_index(batch_op.f('ix_notification_logs_recipient_id'))
+        batch_op.drop_index(batch_op.f('ix_notification_logs_notification_type'))
+        batch_op.drop_index(batch_op.f('ix_notification_logs_created_at'))
+        batch_op.drop_index(batch_op.f('ix_notification_logs_channel'))
+        batch_op.drop_index(batch_op.f('ix_notification_logs_batch_id'))
+        batch_op.drop_index('idx_notification_type_date')
+        batch_op.drop_index('idx_notification_status_channel')
+        batch_op.drop_index('idx_notification_recipient_date')
+        batch_op.drop_index('idx_notification_batch')
+
     op.drop_table('notification_logs')
-    op.drop_index(op.f('ix_login_attempts_username'), table_name='login_attempts')
-    op.drop_index(op.f('ix_login_attempts_user_id'), table_name='login_attempts')
-    op.drop_index(op.f('ix_login_attempts_success'), table_name='login_attempts')
-    op.drop_index(op.f('ix_login_attempts_ip_address'), table_name='login_attempts')
-    op.drop_index(op.f('ix_login_attempts_device_fingerprint'), table_name='login_attempts')
-    op.drop_index(op.f('ix_login_attempts_attempted_at'), table_name='login_attempts')
+    with op.batch_alter_table('login_attempts', schema=None) as batch_op:
+        batch_op.drop_index(batch_op.f('ix_login_attempts_username'))
+        batch_op.drop_index(batch_op.f('ix_login_attempts_user_id'))
+        batch_op.drop_index(batch_op.f('ix_login_attempts_success'))
+        batch_op.drop_index(batch_op.f('ix_login_attempts_ip_address'))
+        batch_op.drop_index(batch_op.f('ix_login_attempts_device_fingerprint'))
+        batch_op.drop_index(batch_op.f('ix_login_attempts_attempted_at'))
+
     op.drop_table('login_attempts')
-    op.drop_index(op.f('ix_geographic_restrictions_facility_id'), table_name='geographic_restrictions')
+    with op.batch_alter_table('geographic_restrictions', schema=None) as batch_op:
+        batch_op.drop_index(batch_op.f('ix_geographic_restrictions_facility_id'))
+
     op.drop_table('geographic_restrictions')
-    op.drop_index(op.f('ix_users_username'), table_name='users')
-    op.drop_index(op.f('ix_users_id'), table_name='users')
-    op.drop_index(op.f('ix_users_email'), table_name='users')
+    with op.batch_alter_table('users', schema=None) as batch_op:
+        batch_op.drop_index(batch_op.f('ix_users_username'))
+        batch_op.drop_index(batch_op.f('ix_users_id'))
+        batch_op.drop_index(batch_op.f('ix_users_email'))
+
     op.drop_table('users')
-    op.drop_index(op.f('ix_roles_name'), table_name='roles')
+    with op.batch_alter_table('roles', schema=None) as batch_op:
+        batch_op.drop_index(batch_op.f('ix_roles_name'))
+
     op.drop_table('roles')
-    op.drop_index(op.f('ix_permissions_name'), table_name='permissions')
+    with op.batch_alter_table('permissions', schema=None) as batch_op:
+        batch_op.drop_index(batch_op.f('ix_permissions_name'))
+
     op.drop_table('permissions')
-    op.drop_index(op.f('ix_facilities_id'), table_name='facilities')
-    op.drop_index(op.f('ix_facilities_facility_name'), table_name='facilities')
-    op.drop_index(op.f('ix_facilities_facility_manager_id'), table_name='facilities')
-    op.drop_index(op.f('ix_facilities_email'), table_name='facilities')
-    op.drop_index(op.f('ix_facilities_created_at'), table_name='facilities')
-    op.drop_index('idx_facility_manager_created', table_name='facilities')
+    with op.batch_alter_table('facilities', schema=None) as batch_op:
+        batch_op.drop_index(batch_op.f('ix_facilities_id'))
+        batch_op.drop_index(batch_op.f('ix_facilities_facility_name'))
+        batch_op.drop_index(batch_op.f('ix_facilities_facility_manager_id'))
+        batch_op.drop_index(batch_op.f('ix_facilities_email'))
+        batch_op.drop_index(batch_op.f('ix_facilities_created_at'))
+        batch_op.drop_index('idx_facility_manager_created')
+
     op.drop_table('facilities')
     # ### end Alembic commands ###

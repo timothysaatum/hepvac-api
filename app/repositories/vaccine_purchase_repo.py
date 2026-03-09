@@ -76,7 +76,7 @@ class VaccinePurchaseRepository:
         query = query.order_by(PatientVaccinePurchase.purchase_date.desc())
 
         result = await self.db.execute(query)
-        return result.scalars().all()
+        return list(result.scalars().all())
 
     async def update_vaccine_purchase(
         self, purchase: PatientVaccinePurchase
@@ -111,7 +111,7 @@ class VaccinePurchaseRepository:
             .where(Payment.vaccine_purchase_id == purchase_id)
             .order_by(Payment.payment_date.desc())
         )
-        return result.scalars().all()
+        return list(result.scalars().all())
 
     # ============= Vaccination Operations =============
     async def create_vaccination(self, vaccination: Vaccination) -> Vaccination:
@@ -142,7 +142,7 @@ class VaccinePurchaseRepository:
             .where(Vaccination.vaccine_purchase_id == purchase_id)
             .order_by(Vaccination.dose_date.asc())
         )
-        return result.scalars().all()
+        return list(result.scalars().all())
 
     async def get_patient_vaccinations(
         self, patient_id: uuid.UUID
@@ -154,4 +154,4 @@ class VaccinePurchaseRepository:
             .where(Vaccination.patient_id == patient_id)
             .order_by(Vaccination.dose_date.desc())
         )
-        return result.scalars().all()
+        return list(result.scalars().all())

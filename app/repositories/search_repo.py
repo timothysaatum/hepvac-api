@@ -139,7 +139,7 @@ class SearchRepository:
         
         # Execute query
         result = await self.db.execute(query)
-        patients = result.scalars().all()
+        patients = list(result.scalars().all())
         
         return patients, total_count
 
@@ -225,7 +225,7 @@ class SearchRepository:
         
         # Execute
         result = await self.db.execute(query)
-        vaccinations = result.scalars().all()
+        vaccinations = list(result.scalars().all())
         
         return vaccinations, total_count
 
@@ -325,6 +325,6 @@ class SearchRepository:
         
         # Execute
         result = await self.db.execute(query)
-        payments = result.scalars().all()
+        payments = list(result.scalars().all())
         
         return payments, total_count, float(total_amount)

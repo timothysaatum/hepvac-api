@@ -1,3 +1,4 @@
+from typing import Optional
 import uuid
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError, HashingError, VerificationError
@@ -36,6 +37,7 @@ def get_password_hash(password: str) -> str:
     """Hash a plaintext password using Argon2"""
     try:
         return ph.hash(password)
+    
     except HashingError as e:
         logger.log_error({"event_type": "password_hashing_failed", "error": str(e)})
         raise HTTPException(status_code=500, detail="Password hashing failed") from e
@@ -67,7 +69,7 @@ def needs_rehash(hashed_password: str) -> bool:
 
 
 async def handle_failed_login(
-    db: AsyncSession, user: User, ip_address: str = None, user_agent: str = None
+    db: AsyncSession, user: User, ip_address: str | None = None, user_agent: str | None = None
 ) -> None:
     """Handle failed login attempt with account locking"""
     try:
@@ -110,7 +112,7 @@ async def handle_failed_login(
 
 
 async def handle_successful_login(
-    db: AsyncSession, user: User, ip_address: str = None, user_agent: str = None
+    db: AsyncSession, user: User, ip_address: str | None = None, user_agent: str | None = None
 ) -> None:
     """Handle successful login with security logging"""
     try:
@@ -170,9 +172,9 @@ def verify_token_and_extract_data(token: str) -> dict:
 
 
 async def get_current_user(
+    request: Request,
     credentials: HTTPAuthorizationCredentials = Security(security),
     db: AsyncSession = Depends(get_db),
-    request: Request = None,
 ) -> User:
     """
     Get current user with enhanced session validation.
@@ -188,7 +190,7 @@ async def get_current_user(
     Raises:
         HTTPException: If authentication fails
     """
-    token = credentials.credentials  # Extract token from credentials
+    token = credentials.credentials
 
     try:
         payload = TokenManager.decode_token(token)
@@ -242,7 +244,7 @@ async def get_current_user(
             )
 
         # Validate session if session ID is in token and request is available
-        if session_id and request:
+        if session_id:
             session = await SessionManager.validate_session(
                 db, uuid.UUID(session_id), request
             )
@@ -301,8 +303,8 @@ async def super_admin_login(login_data: UserLoginSchema, request: Request):
 
 
 def require_super_admin(
+    request: Request,
     credentials: HTTPAuthorizationCredentials = Security(security),
-    request: Request = None,
 ) -> None:
     """
     Dependency to require super admin access.
@@ -314,7 +316,7 @@ def require_super_admin(
     Raises:
         HTTPException: If the user is not a super admin
     """
-    token = credentials.credentials  # Extract token from credentials
+    token = credentials.credentials
 
     try:
         payload = TokenManager.decode_token(token)

@@ -132,18 +132,14 @@ class VaccineService:
                 detail="Vaccine not found",
             )
 
-        # Check if vaccine has active purchases
-        if vaccine.vaccine_purchases:
-            active_purchases = [
-                p
-                for p in vaccine.vaccine_purchases
-                if p.is_active and not p.is_completed()
-            ]
-            if active_purchases:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"Cannot delete vaccine. {len(active_purchases)} active purchase(s) exist.",
-                )
+        # vaccine.vaccine_purchases is lazy="noload" — never iterate it directly.
+        # Query active purchase count from the repo instead.
+        active_purchase_count = await self.repo.get_active_purchase_count(vaccine_id)
+        if active_purchase_count > 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Cannot delete vaccine. {active_purchase_count} active purchase(s) exist.",
+            )
 
         await self.repo.delete_vaccine(vaccine)
         return True
@@ -180,17 +176,15 @@ class VaccineService:
                 detail="Vaccine not found",
             )
 
-        # Calculate reserved quantity from active purchases
-        reserved_quantity = await self.repo.get_vaccine_reserved_quantity(vaccine_id)
-        available_quantity = vaccine.quantity - reserved_quantity
-
+        # reserved_quantity and available_quantity are maintained on the model —
+        # no extra query needed.
         return {
             "id": vaccine.id,
             "vaccine_name": vaccine.vaccine_name,
             "quantity": vaccine.quantity,
             "is_low_stock": vaccine.is_low_on_stock(),
-            "reserved_quantity": reserved_quantity,
-            "available_quantity": max(0, available_quantity),
+            "reserved_quantity": vaccine.reserved_quantity,
+            "available_quantity": vaccine.available_quantity,
             "batch_number": vaccine.batch_number,
         }
 
@@ -212,17 +206,12 @@ class VaccineService:
 
         # Don't allow unpublishing if there are active purchases
         if not publish_data.is_published and vaccine.is_published:
-            if vaccine.vaccine_purchases:
-                active_purchases = [
-                    p
-                    for p in vaccine.vaccine_purchases
-                    if p.is_active and not p.is_completed()
-                ]
-                if active_purchases:
-                    raise HTTPException(
-                        status_code=status.HTTP_400_BAD_REQUEST,
-                        detail=f"Cannot unpublish vaccine. {len(active_purchases)} active purchase(s) exist.",
-                    )
+            active_purchase_count = await self.repo.get_active_purchase_count(vaccine_id)
+            if active_purchase_count > 0:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Cannot unpublish vaccine. {active_purchase_count} active purchase(s) exist.",
+                )
 
         vaccine.is_published = publish_data.is_published
         return await self.repo.update_vaccine(vaccine)

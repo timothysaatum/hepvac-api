@@ -45,9 +45,7 @@ async def create_prescription(
             }
         )
 
-        return PrescriptionResponseSchema.model_validate(
-            prescription, from_attributes=True
-        )
+        return PrescriptionResponseSchema.from_prescription(prescription)
 
     except HTTPException:
         raise
@@ -85,7 +83,7 @@ async def list_patient_prescriptions(
             patient_id, active_only
         )
         return [
-            PrescriptionResponseSchema.model_validate(p, from_attributes=True)
+            PrescriptionResponseSchema.from_prescription(p)
             for p in prescriptions
         ]
 
@@ -131,9 +129,7 @@ async def update_prescription(
             }
         )
 
-        return PrescriptionResponseSchema.model_validate(
-            prescription, from_attributes=True
-        )
+        return PrescriptionResponseSchema.from_prescription(prescription)
 
     except HTTPException:
         raise

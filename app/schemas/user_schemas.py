@@ -18,7 +18,10 @@ class RoleSchema(BaseModel):
 class PermissionSchema(BaseModel):
     """Schema for permission information."""
 
-    id: uuid.UUID
+    # FIX: was uuid.UUID — Permission.id in rbac.py is Integer (autoincrement),
+    # not a UUID. Using the wrong type would cause serialisation errors at runtime
+    # when Pydantic tries to coerce an int to UUID.
+    id: int
     name: str
 
     model_config = {"from_attributes": True}
@@ -178,13 +181,77 @@ class UserCreateSchema(UserBaseSchema):
         return self
 
 
-class UserUpdateSchema(UserBaseSchema):
-    """Schema for updating an existing user."""
+class UserUpdateSchema(BaseModel):
+   
+    username:  Optional[str]      = None
+    full_name: Optional[str]      = None
+    phone:     Optional[str]      = None
+    email:     Optional[EmailStr] = None
+    password:  Optional[str]      = None
+    roles:     Optional[List[str]] = []
 
-    username: Optional[str] = None
-    email: Optional[EmailStr] = None
-    password: Optional[str] = None
-    roles: Optional[List[str]] = []
+    @field_validator("username")
+    @classmethod
+    def validate_username(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        v = v.strip()
+        if not v:
+            raise ValueError("Username cannot be empty")
+        if len(v) < 3 or len(v) > 50:
+            raise ValueError("Username must be between 3 and 50 characters long")
+        if " " in v:
+            raise ValueError("Username must not contain spaces")
+        if not re.match(r"^[a-zA-Z0-9_-]+$", v):
+            raise ValueError(
+                "Username can only contain alphanumeric characters, underscores, and hyphens"
+            )
+        return v
+
+    @field_validator("email")
+    @classmethod
+    def validate_email(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        if " " in v:
+            raise ValueError("Email must not contain spaces")
+        if v.count("@") != 1:
+            raise ValueError('Email must contain exactly one "@" symbol')
+        return v.lower()
+
+    @field_validator("phone")
+    @classmethod
+    def validate_phone(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        v = v.strip()
+        if any(c.isalpha() for c in v):
+            raise ValueError("Phone number must not contain letters")
+        if not re.match(r"^\+?\d{10,15}$", v):
+            raise ValueError(
+                "Phone number must be 10-15 digits, optionally starting with '+'"
+            )
+        return v
+
+    @field_validator("full_name")
+    @classmethod
+    def validate_full_name(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        v = v.strip()
+        if not v:
+            raise ValueError("Full name cannot be empty or whitespace only")
+        if len(v) > 100:
+            raise ValueError("Full name must not exceed 100 characters")
+        if any(char.isdigit() for char in v):
+            raise ValueError("Full name must not contain numbers")
+        if re.search(r"[!@#$%^&*()_+=\[\]{}|;:,.<>?/\\]", v):
+            raise ValueError("Full name must not contain special characters")
+        if len(v.split()) < 2:
+            raise ValueError(
+                "Full name must contain at least a first name and a last name"
+            )
+        return v
 
     @field_validator("password")
     @classmethod
@@ -215,6 +282,8 @@ class UserUpdateSchema(UserBaseSchema):
             raise ValueError("Password must contain at least one special character")
 
         return v
+
+    model_config = {"from_attributes": True}
 
 
 class UserSchema(UserBaseSchema):

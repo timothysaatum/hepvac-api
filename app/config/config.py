@@ -1,9 +1,10 @@
 from pydantic import EmailStr
-from pydantic_settings import BaseSettings
-
+from pydantic_settings import BaseSettings, SettingsConfigDict
+from functools import lru_cache
+from typing import List
 
 class Settings(BaseSettings):
-
+    # environment
     ENVIRONMENT: str
     DATABASE_URL: str
     PRODUCTION_DB_URL: str
@@ -17,7 +18,7 @@ class Settings(BaseSettings):
     MAX_LOGIN_ATTEMPTS: int
     LOGIN_ATTEMPT_WINDOW_MINUTES: int
     ALGORITHM: str
-    CORS_ORIGINS: list[str]
+    CORS_ORIGINS: List[str]
 
     # project details
     API_PREFIX: str
@@ -28,7 +29,6 @@ class Settings(BaseSettings):
     SUPER_ADMIN_USER_NAME: str
     SUPER_ADMIN_PASSWORD_HASH: str
     SUPER_ADMIN_TOKEN_EXPIRE_MINUTES: int
-    # Notification config
 
     # email
     SMTP_HOST: str
@@ -39,26 +39,31 @@ class Settings(BaseSettings):
     FROM_NAME: str
 
     # sms
-    AFRICAISTALKING: str
-    AFRICAISTALKING_AUTH_TOKEN: str
-    AFRICAISTALKING_PHONE_NUMBER: str
-    TERMII_API_KEY: str
-    TERMII_SENDER_ID: str
+    AFRICAISTALKING: str | None = None
+    AFRICAISTALKING_AUTH_TOKEN: str | None = None
+    AFRICAISTALKING_PHONE_NUMBER: str | None = None
+    TERMII_API_KEY: str | None = None
+    TERMII_SENDER_ID: str | None = None
     SMS_PROVIDER: str
 
-    # redis
+    # redis / caching
     REDIS_URL: str
     CACHE_TYPE: str
     CACHE_ENABLED: bool
     CACHE_DEFAULT_TTL: int
     CACHE_KEY_PREFIX: str
 
-    # system setttings
+    # system settings
     SYSTEM_STATUS: str = "up"
 
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+    )
 
+# lru_cache so settings are singleton
+@lru_cache()
+def get_settings() -> Settings:
+    return Settings() # type: ignore
 
-settings = Settings()
+settings = get_settings()

@@ -22,12 +22,12 @@ def require_permission(*perms: str, validate_session: bool = True):
     """
 
     async def checker(
+        request: Request,
         current_user: User = Depends(get_current_user),
-        request: Request = None,
         db: AsyncSession = Depends(get_db),
     ):
         # Enhanced logging
-        logger.debug(
+        logger.log_debug(
             "Permission check initiated",
             extra={
                 "event_type": "permission_check_started",
@@ -43,7 +43,7 @@ def require_permission(*perms: str, validate_session: bool = True):
             perm.name for role in current_user.roles for perm in role.permissions
         ]
 
-        logger.debug(
+        logger.log_debug(
             "User permissions retrieved",
             extra={
                 "event_type": "user_permissions_retrieved",
@@ -63,13 +63,11 @@ def require_permission(*perms: str, validate_session: bool = True):
                     "user_id":str(current_user.id),
                     "ip_address":(
                     getattr(request.client, "host", "unknown")
-                    if request and request.client
+                    if request.client
                     else "unknown"
                     ),
                     "user_agent":(
                     request.headers.get("user-agent", "unknown")
-                    if request
-                    else "unknown"
                     ),
                 }
             )
@@ -89,7 +87,7 @@ def require_permission(*perms: str, validate_session: bool = True):
             )
 
         # Optional session validation for high-security operations
-        if validate_session and request:
+        if validate_session:
             session_valid = await validate_user_session(
                 db=db, current_user=current_user, request=request
             )
@@ -115,7 +113,7 @@ def require_permission(*perms: str, validate_session: bool = True):
                     headers={"WWW-Authenticate": "Bearer"},
                 )
 
-        logger.info(
+        logger.log_info(
             "Access granted - permission check passed",
             extra={
                 "event_type": "access_granted",
@@ -146,11 +144,11 @@ def require_role(*roles: str, validate_session: bool = True):
     """
 
     async def checker(
+        request: Request,
         current_user: User = Depends(get_current_user),
-        request: Request = None,
         db: AsyncSession = Depends(get_db),
     ):
-        logger.debug(
+        logger.log_debug(
             "Role check initiated",
             extra={
                 "event_type": "role_check_started",
@@ -164,7 +162,7 @@ def require_role(*roles: str, validate_session: bool = True):
         # Get user's actual roles
         user_roles = [role.name for role in current_user.roles]
 
-        logger.debug(
+        logger.log_debug(
             "User roles retrieved",
             extra={
                 "event_type": "user_roles_retrieved",
@@ -187,18 +185,16 @@ def require_role(*roles: str, validate_session: bool = True):
                     "user_id":str(current_user.id),
                     "ip_address":(
                         getattr(request.client, "host", "unknown")
-                        if request and request.client
+                        if request.client
                         else "unknown"
                     ),
                     "user_agent":(
                         request.headers.get("user-agent", "unknown")
-                        if request
-                        else "unknown"
                     )
                 }
             )
 
-            logger.warning(
+            logger.log_warning(
                 "Access denied - insufficient roles",
                 extra={
                     "event_type": "access_denied_roles",
@@ -214,7 +210,7 @@ def require_role(*roles: str, validate_session: bool = True):
             )
 
         # Optional session validation for high-security operations
-        if validate_session and request:
+        if validate_session:
             session_valid = await validate_user_session(
                 db=db, current_user=current_user, request=request
             )
@@ -288,9 +284,8 @@ async def validate_user_session(
         payload = TokenManager.decode_token(token)
 
         if not payload:
-            logger.warning(
-                "Session validation failed - invalid token",
-                extra={
+            logger.log_warning(
+                {
                     "event_type": "session_validation_failed",
                     "user_id": str(current_user.id),
                     "reason": "invalid_token",
@@ -348,8 +343,8 @@ def require_admin(validate_session: bool = True):
     """
 
     async def admin_checker(
+        request: Request,
         current_user: User = Depends(get_current_user),
-        request: Request = None,
         db: AsyncSession = Depends(get_db),
     ):
         logger.log_debug(
@@ -373,13 +368,11 @@ def require_admin(validate_session: bool = True):
                     "user_roles": [role.name for role in current_user.roles],
                     "ip_address": (
                         getattr(request.client, "host", "unknown")
-                        if request and request.client
+                        if request.client
                         else "unknown"
                     ),
                     "user_agent": (
                         request.headers.get("user-agent", "unknown")
-                        if request
-                        else "unknown"
                     ),
                 }
             )
@@ -389,7 +382,7 @@ def require_admin(validate_session: bool = True):
             )
 
         # Optional session validation for high-security operations
-        if validate_session and request:
+        if validate_session:
             session_valid = await validate_user_session(
                 db=db, current_user=current_user, request=request
             )
@@ -437,8 +430,8 @@ def require_superadmin(validate_session: bool = True):
     """
 
     async def superadmin_checker(
+        request: Request,
         current_user: User = Depends(get_current_user),
-        request: Request = None,
         db: AsyncSession = Depends(get_db),
     ):
         logger.log_debug(
@@ -460,13 +453,11 @@ def require_superadmin(validate_session: bool = True):
                     "user_roles": [role.name for role in current_user.roles],
                     "ip_address": (
                         getattr(request.client, "host", "unknown")
-                        if request and request.client
+                        if request.client
                         else "unknown"
                     ),
                     "user_agent": (
                         request.headers.get("user-agent", "unknown")
-                        if request
-                        else "unknown"
                     ),
                 }
             )
@@ -476,7 +467,7 @@ def require_superadmin(validate_session: bool = True):
             )
 
         # Optional session validation for high-security operations
-        if validate_session and request:
+        if validate_session:
             session_valid = await validate_user_session(
                 db=db, current_user=current_user, request=request
             )
@@ -524,8 +515,8 @@ def require_staff(validate_session: bool = True):
     """
 
     async def staff_checker(
+        request: Request,
         current_user: User = Depends(get_current_user),
-        request: Request = None,
         db: AsyncSession = Depends(get_db),
     ):
         logger.log_debug(
@@ -551,13 +542,11 @@ def require_staff(validate_session: bool = True):
                     "required_roles": staff_roles,
                     "ip_address": (
                         getattr(request.client, "host", "unknown")
-                        if request and request.client
+                        if request.client
                         else "unknown"
                     ),
                     "user_agent": (
                         request.headers.get("user-agent", "unknown")
-                        if request
-                        else "unknown"
                     ),
                 }
             )
@@ -567,7 +556,7 @@ def require_staff(validate_session: bool = True):
             )
 
         # Optional session validation for high-security operations
-        if validate_session and request:
+        if validate_session:
             session_valid = await validate_user_session(
                 db=db, current_user=current_user, request=request
             )
@@ -615,8 +604,8 @@ def require_authenticated(validate_session: bool = False):
     """
 
     async def checker(
+        request: Request,
         current_user: User = Depends(get_current_user),
-        request: Request = None,
         db: AsyncSession = Depends(get_db),
     ):
         logger.log_debug(
@@ -629,7 +618,7 @@ def require_authenticated(validate_session: bool = False):
         )
 
         # Optional session validation
-        if validate_session and request:
+        if validate_session:
             session_valid = await validate_user_session(
                 db=db, current_user=current_user, request=request
             )

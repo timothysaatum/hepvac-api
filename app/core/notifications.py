@@ -429,8 +429,8 @@ class NotificationService:
     async def send_alert(
         email: Optional[str] = None,
         phone: Optional[str] = None,
-        subject: str = None,
-        message: str = None,
+        subject: str | None = None,
+        message: str | None = None,
     ) -> Dict[str, bool]:
         """
         Send alert via both email and SMS.

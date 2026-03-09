@@ -256,7 +256,7 @@ class SessionManager:
             .where(UserSession.id == session_id)
         )
         session = result.scalar_one_or_none()
-        print(session.is_valid)
+        # print(session.is_valid)
         if not session or not session.is_valid:
             return None
 
@@ -278,7 +278,7 @@ class SessionManager:
                     "new_ip": current_ip,
                 }
             )
-            session.mark_suspicious("ip_change")
+            session.mark_suspicious()
 
         await db.commit()
         return session
@@ -441,14 +441,14 @@ class TokenManager:
 
     @staticmethod
     def create_refresh_token(
-        user_id: UUID, device_info: str = None, ip_address: str = None
+        user_id: str, device_info: str | None = None, ip_address: str | None = None
     ) -> str:
         """Create a refresh token with enhanced tracking"""
 
         jti = str(uuid4())
         expires = datetime.now(timezone.utc) + timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS)
 
-        to_encode = {"sub": str(user_id), "exp": expires, "type": "refresh", "jti": jti}
+        to_encode = {"sub": user_id, "exp": expires, "type": "refresh", "jti": jti}
 
         token = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
         return token

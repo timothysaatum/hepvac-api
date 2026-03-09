@@ -26,8 +26,8 @@ class SecurityRepository:
     ) -> "TrustedDevice":
         from user_agents import parse
 
-        user_agent = request.headers.get("user-agent", "")
-        ua = parse(user_agent)
+        user_agent_str = request.headers.get("user-agent", "")
+        ua = parse(user_agent_str)
 
         device = TrustedDevice(
             user_id=user_id,
@@ -41,13 +41,14 @@ class SecurityRepository:
         )
 
         self.db.add(device)
-        await self.db.commit()
+        
+        await self.db.flush()
         await self.db.refresh(device)
         return device
 
-    async def update_device(self, device: "TrustedDevice"):
+    async def update_device(self, device: "TrustedDevice") -> "TrustedDevice":
         self.db.add(device)
-        await self.db.commit()
+        await self.db.flush()
         await self.db.refresh(device)
         return device
 
@@ -59,15 +60,14 @@ class SecurityRepository:
         )
 
         if facility_id:
-            # Explicitly specify the join condition to avoid ambiguity
             query = query.join(
-                User, TrustedDevice.user_id == User.id  # Specify which FK to use
+                User, TrustedDevice.user_id == User.id
             ).where(User.facility_id == facility_id)
 
         query = query.order_by(TrustedDevice.first_seen.desc())
 
         result = await self.db.execute(query)
-        return result.scalars().all()
+        return list(result.scalars().all())
 
     async def log_login_attempt(
         self,
@@ -77,7 +77,8 @@ class SecurityRepository:
         user_id: Optional[uuid.UUID] = None,
         device_fingerprint: Optional[str] = None,
         failure_reason: Optional[str] = None,
-    ):
+        user_agent: Optional[str] = None,
+    ) -> LoginAttempt:
         attempt = LoginAttempt(
             user_id=user_id,
             username=username,
@@ -85,20 +86,27 @@ class SecurityRepository:
             device_fingerprint=device_fingerprint,
             success=success,
             failure_reason=failure_reason,
+            # FIX: was not passing user_agent to the LoginAttempt constructor
+            # even though the model has a user_agent column. Added the parameter
+            # to the method signature and the constructor call.
+            user_agent=user_agent,
         )
 
         self.db.add(attempt)
-        await self.db.commit()
+        # FIX: was commit() — use flush() so the caller controls the commit.
+        await self.db.flush()
         return attempt
 
     async def get_failed_attempts_count(
         self, identifier: str, identifier_type: str = "ip", minutes: int = 15
     ) -> int:
-        """Count failed login attempts for IP or username in last N minutes"""
+        """Count failed login attempts for IP or username in the last N minutes."""
         time_threshold = datetime.now(timezone.utc) - timedelta(minutes=minutes)
 
         query = select(func.count(LoginAttempt.id)).where(
-            LoginAttempt.success == False,
+            # FIX: was LoginAttempt.success == False — use .is_(False) for
+            # idiomatic SQLAlchemy boolean comparison.
+            LoginAttempt.success.is_(False),
             LoginAttempt.attempted_at >= time_threshold,
         )
 
@@ -111,7 +119,26 @@ class SecurityRepository:
         return result.scalar() or 0
 
     def _get_client_ip(self, request) -> str:
+        """
+        Extract the real client IP from a request.
+
+        FIX: was taking the first value from X-Forwarded-For without
+        validation. This header is user-controlled and can be trivially
+        spoofed. In production, the reverse proxy (nginx/Caddy) should
+        be configured to overwrite — not append — the X-Forwarded-For
+        header so only one trusted value is present.
+
+        This method retains the split logic but adds a note: if your proxy
+        is correctly configured, `forwarded.split(",")[0]` is safe. If not,
+        an attacker can inject an arbitrary IP by prepending values to the
+        header (e.g. "1.2.3.4, real.ip.here").
+
+        For production hardening, configure your proxy to set
+        X-Real-IP (single value, overwritten by proxy) and read that here:
+            return request.headers.get("x-real-ip") or request.client.host
+        """
         forwarded = request.headers.get("x-forwarded-for")
         if forwarded:
+            # Take the leftmost IP — only safe if the proxy overwrites this header.
             return forwarded.split(",")[0].strip()
-        return request.client.host
+        return getattr(request.client, "host", "unknown")

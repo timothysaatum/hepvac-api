@@ -51,7 +51,6 @@ DEFAULT_ROLES = {
     "superadmin": {
         "description": "Super Administrator with full system access",
         "permissions": [
-            # Full access to everything
             "user.create",
             "user.read",
             "user.update",
@@ -79,28 +78,22 @@ DEFAULT_ROLES = {
     "admin": {
         "description": "Administrator with user and role management access",
         "permissions": [
-            # User management
             "user.create",
             "user.read",
             "user.update",
             "user.list",
-            # Role management (limited)
             "role.read",
             "role.assign",
-            # Session management
             "session.view_all",
             "session.terminate",
-            # Audit
             "audit.view",
         ],
     },
     "staff": {
         "description": "Staff member with basic access",
         "permissions": [
-            # Basic user operations
             "user.read",
             "user.list",
-            # View roles
             "role.read",
         ],
     },
@@ -108,7 +101,7 @@ DEFAULT_ROLES = {
 
 
 async def create_permission(
-    db: AsyncSession, name: str, description: str = None
+    db: AsyncSession, name: str, description: str | None = None
 ) -> Permission:
     """
     Create a permission if it doesn't exist.
@@ -152,7 +145,7 @@ async def create_permission(
 
 
 async def create_role(
-    db: AsyncSession, name: str, permissions: List[str] = None
+    db: AsyncSession, name: str, permissions: List[str] | None = None
 ) -> Role:
     """
     Create a role if it doesn't exist and assign permissions.
@@ -313,7 +306,7 @@ async def initialize_rbac(db: AsyncSession) -> None:
 
 
 async def add_custom_permission(
-    db: AsyncSession, name: str, description: str = None
+    db: AsyncSession, name: str, description: str | None = None
 ) -> Permission:
     """
     Add a custom permission to the system.
@@ -345,6 +338,6 @@ async def add_custom_role(db: AsyncSession, name: str, permissions: List[str]) -
         Role: Created role with assigned permissions
 
     Example:
-        >>> await add_custom_role(db, "moderator", ["user.read", "user.update"])
+        >>> Await add_custom_role(db, "moderator", ["user.read", "user.update"])
     """
     return await create_role(db, name, permissions)

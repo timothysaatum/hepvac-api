@@ -46,7 +46,7 @@ class UserRepository:
             .offset(skip)
             .limit(limit)
         )
-        return result.scalars().all()
+        return list(result.scalars().all())
 
     async def get_user_by_username(self, username: str) -> Optional[UserModel]:
         """

@@ -11,6 +11,13 @@ from app.middlewares.device_trust_schemas import DeviceApprovalSchema
 
 
 class SecurityService:
+    """
+    Service layer for device trust management.
+
+    Owns the transaction boundary: repo methods use flush() (not commit())
+    so this layer can group multiple repo operations into one atomic commit.
+    """
+
     def __init__(self, db: AsyncSession):
         self.db = db
         self.repo = SecurityRepository(db)
@@ -20,7 +27,7 @@ class SecurityService:
         device_id: uuid.UUID,
         approval_data: DeviceApprovalSchema,
         approved_by_id: uuid.UUID,
-    ):
+    ) -> TrustedDevice:
         device = await self._get_device(device_id)
 
         device.status = approval_data.status
@@ -33,27 +40,33 @@ class SecurityService:
                 days=approval_data.expires_in_days
             )
 
-        return await self.repo.update_device(device)
+        result = await self.repo.update_device(device)
+        # FIX: repo.update_device now uses flush() not commit(). The service
+        # layer owns the commit so the full operation is atomic.
+        await self.db.commit()
+        return result
 
     async def get_pending_devices(
         self, facility_id: Optional[uuid.UUID] = None
-    ) -> List["TrustedDevice"]:
+    ) -> List[TrustedDevice]:
         return await self.repo.get_pending_devices(facility_id)
 
-    async def get_user_devices(self, user_id: uuid.UUID) -> List["TrustedDevice"]:
+    async def get_user_devices(self, user_id: uuid.UUID) -> List[TrustedDevice]:
         result = await self.db.execute(
             select(TrustedDevice)
             .where(TrustedDevice.user_id == user_id)
             .order_by(TrustedDevice.last_seen.desc())
         )
-        return result.scalars().all()
+        return list(result.scalars().all())
 
-    async def revoke_device(self, device_id: uuid.UUID):
+    async def revoke_device(self, device_id: uuid.UUID) -> TrustedDevice:
         device = await self._get_device(device_id)
         device.status = DeviceStatus.BLOCKED
-        return await self.repo.update_device(device)
+        result = await self.repo.update_device(device)
+        await self.db.commit()
+        return result
 
-    async def _get_device(self, device_id: uuid.UUID):
+    async def _get_device(self, device_id: uuid.UUID) -> TrustedDevice:
         result = await self.db.execute(
             select(TrustedDevice).where(TrustedDevice.id == device_id)
         )

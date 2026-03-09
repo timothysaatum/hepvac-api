@@ -72,7 +72,9 @@ class VaccineRepository:
             query = query.where(Vaccine.is_published == True)
 
         if low_stock_only:
-            query = query.where(Vaccine.quantity < 10)
+            query = query.where(
+                (Vaccine.quantity - Vaccine.reserved_quantity) < Vaccine.LOW_STOCK_THRESHOLD
+            )
 
         # Order by creation date (newest first)
         query = query.order_by(Vaccine.created_at.desc())
@@ -85,7 +87,7 @@ class VaccineRepository:
         # Get paginated results
         paginated_query = query.offset(skip).limit(limit)
         result = await self.db.execute(paginated_query)
-        vaccines = result.scalars().all()
+        vaccines = list(result.scalars().all())
 
         return vaccines, total_count
 
@@ -103,16 +105,35 @@ class VaccineRepository:
 
     # ============= Stock Management Operations =============
     async def get_low_stock_vaccines(self, threshold: int = 10) -> List[Vaccine]:
-        """Get all vaccines with stock below threshold."""
+        """Get all vaccines with available stock below threshold."""
         result = await self.db.execute(
             select(Vaccine)
-            .where(Vaccine.quantity < threshold, Vaccine.is_published == True)
+            .where(
+                (Vaccine.quantity - Vaccine.reserved_quantity) < threshold,
+                Vaccine.is_published == True,
+            )
             .order_by(Vaccine.quantity.asc())
         )
-        return result.scalars().all()
+        return list(result.scalars().all())
+
+    async def get_active_purchase_count(self, vaccine_id: uuid.UUID) -> int:
+        """Return the number of active (non-completed) purchases for a vaccine."""
+        result = await self.db.execute(
+            select(func.count(PatientVaccinePurchase.id)).where(
+                PatientVaccinePurchase.vaccine_id == vaccine_id,
+                PatientVaccinePurchase.is_active == True,
+            )
+        )
+        return result.scalar() or 0
 
     async def get_vaccine_reserved_quantity(self, vaccine_id: uuid.UUID) -> int:
-        """Calculate total reserved quantity from active purchases."""
+        """
+        Calculate total reserved doses from active purchases via a DB query.
+
+        Prefer reading Vaccine.reserved_quantity directly in hot paths.
+        Use this only to reconcile the stored column (e.g. after a migration
+        or data fix) to verify it matches the sum of active purchase doses.
+        """
         result = await self.db.execute(
             select(func.sum(PatientVaccinePurchase.total_doses)).where(
                 PatientVaccinePurchase.vaccine_id == vaccine_id,
@@ -153,7 +174,9 @@ class VaccineRepository:
             query = query.where(Vaccine.is_published == True)
     
         if low_stock:
-            query = query.where(Vaccine.quantity < 50)
+            query = query.where(
+                (Vaccine.quantity - Vaccine.reserved_quantity) < Vaccine.LOW_STOCK_THRESHOLD
+            )
     
         # ADD DATE RANGE FILTERING
         if created_from:
@@ -175,5 +198,4 @@ class VaccineRepository:
         query = query.order_by(Vaccine.vaccine_name.asc())
 
         result = await self.db.execute(query)
-        return result.scalars().all()
-
+        return list(result.scalars().all())

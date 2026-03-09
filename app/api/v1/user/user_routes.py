@@ -189,7 +189,7 @@ async def login_user(
         user_data = UserSchema.model_validate(user, from_attributes=True)
 
         # Create AuthResponse by adding access_token
-        return AuthResponse(**user_data.model_dump(), access_token=token_or_error)
+        return AuthResponse(**user_data.model_dump(), access_token=token_or_error or "")
 
     except HTTPException:
         # Re-raise HTTP exceptions as-is (including device trust errors)
@@ -241,7 +241,7 @@ async def authenticate_superadmin(
         data={"sub": login_data.username, "type": "superadmin"},
         expires_delta=timedelta(minutes=settings.SUPER_ADMIN_TOKEN_EXPIRE_MINUTES),
     )
-    refresh_token = TokenManager.create_refresh_token(login_data.username)
+    refresh_token = TokenManager.create_refresh_token(str(login_data.username))
 
     set_refresh_token_cookie(
         key="superadmin_refresh_token",
@@ -294,7 +294,7 @@ async def refresh_superadmin_token(
         expires_delta=timedelta(minutes=settings.SUPER_ADMIN_TOKEN_EXPIRE_MINUTES),
     )
 
-    return SuperAdminAuthResponse(username=username, access_token=new_access_token)
+    return SuperAdminAuthResponse(username=username or "", access_token=new_access_token)
 
 
 @router.post("/refresh", response_model=AuthResponse)
@@ -384,8 +384,10 @@ async def refresh_token(
         # Get user with relationships
         result = await db.execute(
             select(User)
-            .options(selectinload(User.roles).selectinload(Role.permissions))
-            .where(User.id == refresh_token_record.user_id)
+            .options(
+                selectinload(User.roles).selectinload(Role.permissions),
+                selectinload(User.facility),
+            )
         )
         user = result.scalar_one_or_none()
 
@@ -769,8 +771,8 @@ async def list_users(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_admin()),
     pagination: PaginationParams = Depends(get_pagination_params),
-    is_active: bool = None,
-    search: str = None,
+    is_active: bool | None = None,
+    search: str | None = None,
 ):
     """
     Get paginated list of users (Admin only).

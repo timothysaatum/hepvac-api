@@ -83,7 +83,7 @@ async def show_role(role_name: str):
             print(f"Role '{role_name}' not found.")
             return
 
-        print(f"\n📋 Role: {role.name}")
+        print(f" Role: {role.name}")
         print(f"   ID: {role.id}")
 
         if role_name in DEFAULT_ROLES:

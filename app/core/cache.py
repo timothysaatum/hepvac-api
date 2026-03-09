@@ -1,5 +1,5 @@
 """
-Production-Ready Cache Utility
+Cache Utility
 
 Provides a flexible caching system with support for Redis and in-memory caching.
 Includes cache invalidation, TTL management, and decorators for easy usage.
@@ -37,16 +37,14 @@ class InMemoryCache:
     """Simple in-memory cache implementation."""
 
     def __init__(self):
-        self._cache = {}
-        self._expiry = {}
+        self._cache: dict = {}
+        self._expiry: dict = {}
 
     async def get(self, key: str) -> Optional[Any]:
         """Get value from cache."""
         if key in self._cache:
-            # Check if expired
             if key in self._expiry:
                 import time
-
                 if time.time() > self._expiry[key]:
                     await self.delete(key)
                     return None
@@ -58,7 +56,6 @@ class InMemoryCache:
         self._cache[key] = value
         if ttl:
             import time
-
             self._expiry[key] = time.time() + ttl
         return True
 
@@ -81,7 +78,6 @@ class InMemoryCache:
     async def delete_pattern(self, pattern: str) -> int:
         """Delete all keys matching pattern."""
         import re
-
         regex = re.compile(pattern.replace("*", ".*"))
         keys_to_delete = [key for key in self._cache.keys() if regex.match(key)]
         for key in keys_to_delete:
@@ -94,15 +90,15 @@ class RedisCache:
 
     def __init__(self, redis_url: str):
         self.redis_url = redis_url
-        self._client: Optional[redis.Redis] = None
+        self._client: Optional["redis.Redis"] = None
 
-    async def _get_client(self) -> redis.Redis:
+    async def _get_client(self) -> "redis.Redis":
         """Get or create Redis client."""
         if self._client is None:
             self._client = redis.from_url(
                 self.redis_url,
                 encoding="utf-8",
-                decode_responses=False,  # Handle binary data
+                decode_responses=False,
             )
         return self._client
 
@@ -123,7 +119,6 @@ class RedisCache:
         try:
             client = await self._get_client()
             serialized = pickle.dumps(value)
-
             if ttl:
                 await client.setex(key, ttl, serialized)
             else:
@@ -140,9 +135,7 @@ class RedisCache:
             await client.delete(key)
             return True
         except Exception as e:
-            logger.log_error(
-                {"event": "cache_delete_error", "key": key, "error": str(e)}
-            )
+            logger.log_error({"event": "cache_delete_error", "key": key, "error": str(e)})
             return False
 
     async def exists(self, key: str) -> bool:
@@ -151,9 +144,7 @@ class RedisCache:
             client = await self._get_client()
             return await client.exists(key) > 0
         except Exception as e:
-            logger.log_error(
-                {"event": "cache_exists_error", "key": key, "error": str(e)}
-            )
+            logger.log_error({"event": "cache_exists_error", "key": key, "error": str(e)})
             return False
 
     async def clear(self) -> bool:
@@ -173,17 +164,12 @@ class RedisCache:
             keys = []
             async for key in client.scan_iter(match=pattern):
                 keys.append(key)
-
             if keys:
                 await client.delete(*keys)
             return len(keys)
         except Exception as e:
             logger.log_error(
-                {
-                    "event": "cache_delete_pattern_error",
-                    "pattern": pattern,
-                    "error": str(e),
-                }
+                {"event": "cache_delete_pattern_error", "pattern": pattern, "error": str(e)}
             )
             return 0
 
@@ -193,9 +179,7 @@ class RedisCache:
             client = await self._get_client()
             return await client.incrby(key, amount)
         except Exception as e:
-            logger.log_error(
-                {"event": "cache_increment_error", "key": key, "error": str(e)}
-            )
+            logger.log_error({"event": "cache_increment_error", "key": key, "error": str(e)})
             return None
 
     async def get_ttl(self, key: str) -> Optional[int]:
@@ -204,9 +188,7 @@ class RedisCache:
             client = await self._get_client()
             return await client.ttl(key)
         except Exception as e:
-            logger.log_error(
-                {"event": "cache_get_ttl_error", "key": key, "error": str(e)}
-            )
+            logger.log_error({"event": "cache_get_ttl_error", "key": key, "error": str(e)})
             return None
 
     async def close(self):
@@ -215,38 +197,55 @@ class RedisCache:
             await self._client.close()
 
 
+# Union type for the cache backend — used throughout CacheManager
+CacheBackend = Union[InMemoryCache, RedisCache]
+
+
 class CacheManager:
     """Main cache manager with automatic backend selection."""
 
     def __init__(self):
-        self._backend = None
-        self._initialized = False
+        # Typed as Optional so __init__ stays simple; _backend property
+        # guards all access and raises clearly if somehow called before init.
+        self._backend: Optional[CacheBackend] = None
+        self._initialized: bool = False
 
-    async def _initialize(self):
+    @property
+    def backend(self) -> CacheBackend:
+        """
+        Return the initialised backend.
+
+        Raises RuntimeError if accessed before _initialize() has run,
+        which eliminates the 'attribute of None' type errors while keeping
+        a clear runtime guard.
+        """
+        if self._backend is None:
+            raise RuntimeError(
+                "Cache backend accessed before initialisation. "
+                "Ensure await cache._initialize() has been called."
+            )
+        return self._backend
+
+    async def _initialize(self) -> None:
         """Initialize cache backend."""
         if self._initialized:
             return
 
         if not CacheConfig.CACHE_ENABLED:
             logger.log_info({"event": "cache_disabled"})
-            self._backend = InMemoryCache()  # Fallback to memory
+            self._backend = InMemoryCache()
             self._initialized = True
             return
 
         if CacheConfig.CACHE_TYPE == "redis" and REDIS_AVAILABLE:
             try:
                 self._backend = RedisCache(CacheConfig.REDIS_URL)
-                # Test connection
                 await self._backend.set("__test__", "ok", ttl=10)
                 await self._backend.delete("__test__")
                 logger.log_info({"event": "cache_initialized", "backend": "redis"})
             except Exception as e:
                 logger.log_warning(
-                    {
-                        "event": "redis_connection_failed",
-                        "error": str(e),
-                        "fallback": "memory",
-                    }
+                    {"event": "redis_connection_failed", "error": str(e), "fallback": "memory"}
                 )
                 self._backend = InMemoryCache()
         else:
@@ -262,38 +261,32 @@ class CacheManager:
     async def get(self, key: str) -> Optional[Any]:
         """Get value from cache."""
         await self._initialize()
-        cache_key = self._make_key(key)
-        return await self._backend.get(cache_key)
+        return await self.backend.get(self._make_key(key))
 
     async def set(self, key: str, value: Any, ttl: Optional[int] = None) -> bool:
         """Set value in cache."""
         await self._initialize()
-        cache_key = self._make_key(key)
-        ttl = ttl or CacheConfig.CACHE_DEFAULT_TTL
-        return await self._backend.set(cache_key, value, ttl)
+        return await self.backend.set(self._make_key(key), value, ttl or CacheConfig.CACHE_DEFAULT_TTL)
 
     async def delete(self, key: str) -> bool:
         """Delete key from cache."""
         await self._initialize()
-        cache_key = self._make_key(key)
-        return await self._backend.delete(cache_key)
+        return await self.backend.delete(self._make_key(key))
 
     async def exists(self, key: str) -> bool:
         """Check if key exists."""
         await self._initialize()
-        cache_key = self._make_key(key)
-        return await self._backend.exists(cache_key)
+        return await self.backend.exists(self._make_key(key))
 
     async def clear(self) -> bool:
         """Clear all cache."""
         await self._initialize()
-        return await self._backend.clear()
+        return await self.backend.clear()
 
     async def delete_pattern(self, pattern: str) -> int:
         """Delete all keys matching pattern."""
         await self._initialize()
-        cache_pattern = self._make_key(pattern)
-        return await self._backend.delete_pattern(cache_pattern)
+        return await self.backend.delete_pattern(self._make_key(pattern))
 
     async def get_or_set(
         self, key: str, factory: Callable, ttl: Optional[int] = None
@@ -313,13 +306,7 @@ class CacheManager:
         if value is not None:
             return value
 
-        # Compute value
-        if asyncio.iscoroutinefunction(factory):
-            value = await factory()
-        else:
-            value = factory()
-
-        # Cache it
+        value = await factory() if asyncio.iscoroutinefunction(factory) else factory()
         await self.set(key, value, ttl)
         return value
 
@@ -372,11 +359,9 @@ def cached(
     def decorator(func: Callable):
         @wraps(func)
         async def wrapper(*args, **kwargs):
-            # Build cache key
             if key_builder:
                 cache_key = key_builder(*args, **kwargs)
             else:
-                # Default key builder
                 func_name = f"{func.__module__}.{func.__name__}"
                 arg_key = cache.generate_key(*args, **kwargs)
                 cache_key = (
@@ -385,23 +370,15 @@ def cached(
                     else f"{func_name}:{arg_key}"
                 )
 
-            # Try to get from cache
             cached_value = await cache.get(cache_key)
             if cached_value is not None:
                 logger.log_debug({"event": "cache_hit", "key": cache_key})
                 return cached_value
 
-            # Compute value
-            if asyncio.iscoroutinefunction(func):
-                result = await func(*args, **kwargs)
-            else:
-                result = func(*args, **kwargs)
+            result = await func(*args, **kwargs) if asyncio.iscoroutinefunction(func) else func(*args, **kwargs)
 
-            # Cache result
             await cache.set(cache_key, result, ttl)
-
             logger.log_debug({"event": "cache_miss", "key": cache_key})
-
             return result
 
         return wrapper
@@ -422,13 +399,8 @@ def cache_invalidate(*keys: str):
     def decorator(func: Callable):
         @wraps(func)
         async def wrapper(*args, **kwargs):
-            # Execute function
-            if asyncio.iscoroutinefunction(func):
-                result = await func(*args, **kwargs)
-            else:
-                result = func(*args, **kwargs)
+            result = await func(*args, **kwargs) if asyncio.iscoroutinefunction(func) else func(*args, **kwargs)
 
-            # Invalidate cache keys
             for key in keys:
                 if "*" in key:
                     await cache.delete_pattern(key)
@@ -436,7 +408,6 @@ def cache_invalidate(*keys: str):
                     await cache.delete(key)
 
             logger.log_debug({"event": "cache_invalidated", "keys": keys})
-
             return result
 
         return wrapper

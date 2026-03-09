@@ -304,7 +304,7 @@ class FacilityService:
         facility = await self.get_facility_by_id(facility_id)
 
         # Verify user exists and has appropriate role
-        user = await self.user_repo.get_user_by_id(manager_id)
+        user = await self.user_repo.get_user_by_id(str(manager_id))
         if not user:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -364,7 +364,7 @@ class FacilityService:
         await self.get_facility_by_id(facility_id)
 
         # Verify user exists
-        user = await self.user_repo.get_user_by_id(user_id)
+        user = await self.user_repo.get_user_by_id(str(user_id))
         if not user:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -406,7 +406,7 @@ class FacilityService:
         Raises:
             HTTPException: If user not found
         """
-        user = await self.user_repo.get_user_by_id(user_id)
+        user = await self.user_repo.get_user_by_id(str(user_id))
         if not user:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,

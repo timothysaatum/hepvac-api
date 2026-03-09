@@ -1,67 +1,67 @@
+"""
+Vaccine and vaccination schemas — request validation and response serialisation
+for Vaccine, Vaccination, PatientVaccinePurchase, and Payment.
+"""
+
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Optional
 import uuid
+
 from pydantic import BaseModel, field_validator
 
 from app.schemas.patient_schemas import DoseType, PaymentStatus
 
 
-# ============= Vaccine Schemas =============
-class VaccineBaseSchema(BaseModel):
-    """Base schema for vaccine."""
+# ============================================================================
+# Vaccine
+# ============================================================================
 
-    vaccine_name: str
+
+class VaccineBaseSchema(BaseModel):
+    """Base fields for a vaccine master record."""
+
+    vaccine_name:   str
     price_per_dose: Decimal
-    quantity: int
-    batch_number: str
+    quantity:       int
+    batch_number:   str
 
     @field_validator("vaccine_name")
     @classmethod
     def validate_vaccine_name(cls, v: str) -> str:
-        """Validate vaccine name."""
         if not v or not v.strip():
-            raise ValueError("Vaccine name cannot be empty")
-
+            raise ValueError("Vaccine name cannot be empty.")
         v = v.strip()
-
         if len(v) < 2 or len(v) > 100:
-            raise ValueError("Vaccine name must be between 2 and 100 characters")
-
+            raise ValueError("Vaccine name must be between 2 and 100 characters.")
         return v
 
     @field_validator("price_per_dose")
     @classmethod
     def validate_price_per_dose(cls, v: Decimal) -> Decimal:
-        """Validate price per dose."""
         if v <= 0:
-            raise ValueError("Price per dose must be greater than zero")
-        if v > 10000:
-            raise ValueError("Price per dose cannot exceed GHS 10,000")
+            raise ValueError("Price per dose must be greater than zero.")
+        if v > 10_000:
+            raise ValueError("Price per dose cannot exceed GHS 10,000.")
         return v
 
     @field_validator("quantity")
     @classmethod
     def validate_quantity(cls, v: int) -> int:
-        """Validate quantity."""
         if v < 0:
-            raise ValueError("Quantity cannot be negative")
-        if v > 100000:
-            raise ValueError("Quantity cannot exceed 100,000")
+            raise ValueError("Quantity cannot be negative.")
+        if v > 100_000:
+            raise ValueError("Quantity cannot exceed 100,000.")
         return v
 
     @field_validator("batch_number")
     @classmethod
     def validate_batch_number(cls, v: str) -> str:
-        """Validate batch number."""
         if not v or not v.strip():
-            raise ValueError("Batch number cannot be empty")
-
+            raise ValueError("Batch number cannot be empty.")
         v = v.strip()
-
         if len(v) < 3 or len(v) > 100:
-            raise ValueError("Batch number must be between 3 and 100 characters")
-
+            raise ValueError("Batch number must be between 3 and 100 characters.")
         return v
 
     model_config = {"from_attributes": True}
@@ -69,178 +69,172 @@ class VaccineBaseSchema(BaseModel):
 
 class VaccineCreateSchema(VaccineBaseSchema):
     """
-    Schema for creating a new vaccine.
+    Create a new vaccine master record.
 
-    Note: added_by_id is automatically populated from authenticated user.
-    Do not include this field in the request body.
+    `added_by_id` is populated from the authenticated user — do not include
+    in the request body.
     """
-
-    # This will be set from authenticated user
-    added_by_id: Optional[uuid.UUID] = None
+    added_by_id:  Optional[uuid.UUID] = None  # set from auth context
     is_published: bool = False
 
 
 class VaccineUpdateSchema(BaseModel):
-    """Schema for updating a vaccine. All fields are optional."""
+    """Update a vaccine master record. All fields optional."""
 
-    vaccine_name: Optional[str] = None
+    vaccine_name:   Optional[str]     = None
     price_per_dose: Optional[Decimal] = None
-    quantity: Optional[int] = None
-    batch_number: Optional[str] = None
-    is_published: Optional[bool] = None
+    quantity:       Optional[int]     = None
+    batch_number:   Optional[str]     = None
+    is_published:   Optional[bool]    = None
 
     @field_validator("vaccine_name")
     @classmethod
     def validate_vaccine_name(cls, v: Optional[str]) -> Optional[str]:
-        """Validate vaccine name."""
         if v is None:
             return v
-
-        if not v or not v.strip():
-            raise ValueError("Vaccine name cannot be empty")
-
         v = v.strip()
-
+        if not v:
+            raise ValueError("Vaccine name cannot be empty.")
         if len(v) < 2 or len(v) > 100:
-            raise ValueError("Vaccine name must be between 2 and 100 characters")
-
+            raise ValueError("Vaccine name must be between 2 and 100 characters.")
         return v
 
     @field_validator("price_per_dose")
     @classmethod
     def validate_price_per_dose(cls, v: Optional[Decimal]) -> Optional[Decimal]:
-        """Validate price per dose."""
         if v is not None:
             if v <= 0:
-                raise ValueError("Price per dose must be greater than zero")
-            if v > 10000:
-                raise ValueError("Price per dose cannot exceed GHS 10,000")
+                raise ValueError("Price per dose must be greater than zero.")
+            if v > 10_000:
+                raise ValueError("Price per dose cannot exceed GHS 10,000.")
         return v
 
     @field_validator("quantity")
     @classmethod
     def validate_quantity(cls, v: Optional[int]) -> Optional[int]:
-        """Validate quantity."""
         if v is not None:
             if v < 0:
-                raise ValueError("Quantity cannot be negative")
-            if v > 100000:
-                raise ValueError("Quantity cannot exceed 100,000")
+                raise ValueError("Quantity cannot be negative.")
+            if v > 100_000:
+                raise ValueError("Quantity cannot exceed 100,000.")
         return v
 
     @field_validator("batch_number")
     @classmethod
     def validate_batch_number(cls, v: Optional[str]) -> Optional[str]:
-        """Validate batch number."""
         if v is None:
             return v
-
-        if not v or not v.strip():
-            raise ValueError("Batch number cannot be empty")
-
         v = v.strip()
-
+        if not v:
+            raise ValueError("Batch number cannot be empty.")
         if len(v) < 3 or len(v) > 100:
-            raise ValueError("Batch number must be between 3 and 100 characters")
-
+            raise ValueError("Batch number must be between 3 and 100 characters.")
         return v
 
     model_config = {"from_attributes": True}
 
 
 class VaccineResponseSchema(VaccineBaseSchema):
-    """Schema for vaccine response."""
+    """Vaccine master record response."""
 
-    id: uuid.UUID
+    id:           uuid.UUID
     is_published: bool
-    added_by_id: Optional[uuid.UUID] = None
-    created_at: datetime
+    added_by_id:  Optional[uuid.UUID] = None
+    created_at:   datetime
 
     model_config = {"from_attributes": True}
 
 
 class VaccineStockUpdateSchema(BaseModel):
-    """Schema for updating vaccine stock quantity."""
+    """Add stock to a vaccine."""
 
     quantity_to_add: int
 
     @field_validator("quantity_to_add")
     @classmethod
     def validate_quantity_to_add(cls, v: int) -> int:
-        """Validate quantity to add."""
         if v <= 0:
-            raise ValueError("Quantity to add must be greater than zero")
-        if v > 10000:
-            raise ValueError("Cannot add more than 10,000 units at once")
+            raise ValueError("Quantity to add must be greater than zero.")
+        if v > 10_000:
+            raise ValueError("Cannot add more than 10,000 units at once.")
         return v
 
     model_config = {"from_attributes": True}
 
 
 class VaccineStockInfoSchema(BaseModel):
-    """Schema for vaccine stock information."""
+    """Stock-level summary for a vaccine."""
 
-    id: uuid.UUID
-    vaccine_name: str
-    quantity: int
-    is_low_stock: bool
-    reserved_quantity: int
+    id:                 uuid.UUID
+    vaccine_name:       str
+    quantity:           int
+    is_low_stock:       bool
+    reserved_quantity:  int
     available_quantity: int
-    batch_number: str
+    batch_number:       str
 
     model_config = {"from_attributes": True}
 
 
 class VaccinePublishSchema(BaseModel):
-    """Schema for publishing/unpublishing a vaccine."""
+    """Publish or u>npublish a vaccine."""
 
     is_published: bool
 
     model_config = {"from_attributes": True}
 
 
-# ============= Vaccination Schemas =============
+# ============================================================================
+# Vaccination
+# ============================================================================
+
+
 class VaccinationBaseSchema(BaseModel):
-    """Base schema for vaccination."""
+    """Base fields for a vaccination (dose administration) record."""
 
     vaccine_purchase_id: Optional[uuid.UUID] = None
-    dose_number: DoseType = DoseType.FIRST_DOSE
-    dose_date: date
-    batch_number: Optional[str] = None
-    vaccine_name: Optional[str] = None
-    vaccine_price: Optional[Decimal] = None
-    # Auto-populated from authenticated user
-    administered_by_id: Optional[uuid.UUID] = None
-    notes: Optional[str] = None
+    dose_number:         DoseType            = DoseType.FIRST_DOSE
+    dose_date:           date
+    batch_number:        Optional[str]       = None
+    vaccine_name:        Optional[str]       = None
+    vaccine_price:       Optional[Decimal]   = None
+    administered_by_id:  Optional[uuid.UUID] = None   # set from auth context
+    notes:               Optional[str]       = None
 
     @field_validator("dose_number")
     @classmethod
-    def validate_dose_number(cls, v: str) -> str:
-        """Validate dose number."""
-        if v not in ["1st dose", "2nd dose", "3rd dose"]:
-            raise ValueError("Dose number must be 1st dose, 2nd dose, or 3rd dose")
+    def validate_dose_number(cls, v: DoseType) -> DoseType:
+        # FIX: was comparing a DoseType enum value to raw strings using `not in
+        # ("1st dose", ...)`. Pydantic coerces the input to DoseType before
+        # the validator runs, so `v` is already a DoseType instance — the
+        # string comparison would always fail for valid enum members because
+        # DoseType("1st dose") != "1st dose". The correct check is against
+        # enum members.
+        valid = {DoseType.FIRST_DOSE, DoseType.SECOND_DOSE, DoseType.THIRD_DOSE}
+        if v not in valid:
+            raise ValueError(
+                f"Dose number must be one of: "
+                f"{', '.join(d.value for d in valid)}."
+            )
         return v
 
     @field_validator("batch_number")
     @classmethod
-    def validate_batch_number(cls, v: str) -> str:
-        """Validate batch number."""
-        if not v or not v.strip():
-            raise ValueError("Batch number cannot be empty")
-
+    def validate_batch_number(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
         v = v.strip()
-
+        if not v:
+            raise ValueError("Batch number cannot be empty.")
         if len(v) < 3 or len(v) > 100:
-            raise ValueError("Batch number must be between 3 and 100 characters")
-
+            raise ValueError("Batch number must be between 3 and 100 characters.")
         return v
 
     @field_validator("vaccine_price")
     @classmethod
-    def validate_vaccine_price(cls, v: Decimal) -> Decimal:
-        """Validate vaccine price."""
-        if v <= 0:
-            raise ValueError("Vaccine price must be greater than zero")
+    def validate_vaccine_price(cls, v: Optional[Decimal]) -> Optional[Decimal]:
+        if v is not None and v <= 0:
+            raise ValueError("Vaccine price must be greater than zero.")
         return v
 
     model_config = {"from_attributes": True}
@@ -248,68 +242,69 @@ class VaccinationBaseSchema(BaseModel):
 
 class VaccinationCreateSchema(VaccinationBaseSchema):
     """
-    Schema for creating a new vaccination record.
+    Create a vaccination record.
 
-    Note: patient_id and administered_by_id are auto-populated.
-    Do not include patient_id in request body (comes from URL path).
+    `patient_id` is populated from the URL path parameter.
+    `administered_by_id` is populated from the authenticated user.
+    Do not include these in the request body.
     """
-
-    # This will be set from URL path parameter
-    patient_id: Optional[uuid.UUID] = None
+    patient_id: Optional[uuid.UUID] = None   # set from URL path
 
 
 class VaccinationUpdateSchema(BaseModel):
-    """Schema for updating a vaccination record."""
+    """Update a vaccination record."""
 
-    dose_date: Optional[date] = None
+    dose_date:    Optional[date] = None
     batch_number: Optional[str] = None
-    notes: Optional[str] = None
+    notes:        Optional[str] = None
 
     model_config = {"from_attributes": True}
 
 
 class VaccinationResponseSchema(BaseModel):
-    """Schema for vaccination response."""
+    """Vaccination record response."""
 
-    id: uuid.UUID
-    patient_id: uuid.UUID
+    id:                  uuid.UUID
+    patient_id:          uuid.UUID
     vaccine_purchase_id: uuid.UUID
-    dose_number: DoseType
-    dose_date: date
-    batch_number: str
-    vaccine_name: str
-    vaccine_price: Decimal
-    administered_by_id: Optional[uuid.UUID] = None
-    notes: Optional[str] = None
-    created_at: datetime
+    dose_number:         DoseType
+    dose_date:           date
+    batch_number:        str
+    vaccine_name:        str
+    vaccine_price:       Decimal
+    administered_by_id:  Optional[uuid.UUID] = None
+    notes:               Optional[str]       = None
+    created_at:          datetime
 
     model_config = {"from_attributes": True}
 
 
-# ============= Vaccine Purchase Schemas =============
-class PatientVaccinePurchaseBaseSchema(BaseModel):
-    """Base schema for patient vaccine purchase."""
+# ============================================================================
+# Patient Vaccine Purchase
+# ============================================================================
 
-    vaccine_id: uuid.UUID
-    vaccine_name: str
+
+class PatientVaccinePurchaseBaseSchema(BaseModel):
+    """Base fields for a vaccine purchase."""
+
+    vaccine_id:     uuid.UUID
+    vaccine_name:   str
     price_per_dose: Decimal
-    total_doses: int = 3
-    notes: Optional[str] = None
+    total_doses:    int = 3
+    notes:          Optional[str] = None
 
     @field_validator("price_per_dose")
     @classmethod
     def validate_price_per_dose(cls, v: Decimal) -> Decimal:
-        """Validate price per dose."""
         if v <= 0:
-            raise ValueError("Price per dose must be greater than zero")
+            raise ValueError("Price per dose must be greater than zero.")
         return v
 
     @field_validator("total_doses")
     @classmethod
     def validate_total_doses(cls, v: int) -> int:
-        """Validate total doses."""
         if v < 1 or v > 10:
-            raise ValueError("Total doses must be between 1 and 10")
+            raise ValueError("Total doses must be between 1 and 10.")
         return v
 
     model_config = {"from_attributes": True}
@@ -317,80 +312,89 @@ class PatientVaccinePurchaseBaseSchema(BaseModel):
 
 class PatientVaccinePurchaseCreateSchema(BaseModel):
     """
-    Schema for creating a patient vaccine purchase.
+    Create a vaccine purchase for a patient.
 
-    Note: patient_id and created_by_id are auto-populated from URL path and authenticated user.
+    `patient_id` and `created_by_id` are auto-populated from the URL path
+    and authenticated user respectively — do not include in the request body.
     """
-
-    vaccine_id: uuid.UUID
-    patient_id: Optional[uuid.UUID] = None
-    total_doses: int
-    created_by_id: Optional[uuid.UUID] = None
+    vaccine_id:    uuid.UUID
+    patient_id:    Optional[uuid.UUID] = None   # set from URL path
+    total_doses:   int
+    created_by_id: Optional[uuid.UUID] = None   # set from auth context
 
 
 class PatientVaccinePurchaseUpdateSchema(BaseModel):
-    """Schema for updating a patient vaccine purchase."""
-
+    """Update a vaccine purchase (currently no editable fields via API)."""
     model_config = {"from_attributes": True}
 
 
 class PatientVaccinePurchaseResponseSchema(BaseModel):
-    """Schema for patient vaccine purchase response."""
+    """Vaccine purchase response."""
 
-    id: uuid.UUID
-    patient_id: uuid.UUID
-    vaccine_id: uuid.UUID
-    vaccine_name: str
-    price_per_dose: Decimal
-    total_doses: int
+    id:                  uuid.UUID
+    patient_id:          uuid.UUID
+    vaccine_id:          uuid.UUID
+    vaccine_name:        str
+    price_per_dose:      Decimal
+    total_doses:         int
     total_package_price: Decimal
-    amount_paid: Decimal
-    balance: Decimal
-    payment_status: PaymentStatus
-    doses_administered: int
-    batch_number: str
-    purchase_date: datetime
-    is_active: bool
-    notes: Optional[str] = None
-    created_by_id: Optional[uuid.UUID] = None
-    created_at: datetime
-    updated_at: datetime
+    amount_paid:         Decimal
+    balance:             Decimal
+    payment_status:      PaymentStatus
+    doses_administered:  int
+    batch_number:        str
+    purchase_date:       datetime
+    is_active:           bool
+    notes:               Optional[str]       = None
+    created_by_id:       Optional[uuid.UUID] = None
+    created_at:          datetime
+    updated_at:          datetime
 
     model_config = {"from_attributes": True}
 
 
 class PatientVaccinePurchaseProgressSchema(BaseModel):
-    """Schema for vaccine purchase progress summary."""
+    """
+    Payment and dose progress summary for a vaccine purchase.
 
-    total_price: float
-    amount_paid: float
-    balance: float
-    payment_status: str
-    total_doses: int
-    doses_paid_for: int
+    FIX: monetary fields changed from `float` to `Decimal`.
+    The model's get_payment_progress() returns str representations of Decimal
+    values to avoid IEEE 754 precision loss. Pydantic correctly coerces
+    those str values to Decimal here.
+    """
+
+    total_price:        Decimal   # was float — precision loss on monetary values
+    amount_paid:        Decimal   # was float
+    balance:            Decimal   # was float
+    payment_status:     str
+    total_doses:        int
+    doses_paid_for:     int
     doses_administered: int
-    eligible_doses: int
-    is_completed: bool
+    eligible_doses:     int
+    is_completed:       bool
 
     model_config = {"from_attributes": True}
 
 
-# ============= Payment Schemas =============
-class PaymentBaseSchema(BaseModel):
-    """Base schema for payment."""
+# ============================================================================
+# Payment
+# ============================================================================
 
-    amount: Decimal
-    payment_date: date
-    payment_method: Optional[str] = None
+
+class PaymentBaseSchema(BaseModel):
+    """Base fields for a payment transaction."""
+
+    amount:           Decimal
+    payment_date:     date
+    payment_method:   Optional[str] = None
     reference_number: Optional[str] = None
-    notes: Optional[str] = None
+    notes:            Optional[str] = None
 
     @field_validator("amount")
     @classmethod
     def validate_amount(cls, v: Decimal) -> Decimal:
-        """Validate payment amount."""
         if v <= 0:
-            raise ValueError("Payment amount must be greater than zero")
+            raise ValueError("Payment amount must be greater than zero.")
         return v
 
     model_config = {"from_attributes": True}
@@ -398,22 +402,30 @@ class PaymentBaseSchema(BaseModel):
 
 class PaymentCreateSchema(PaymentBaseSchema):
     """
-    Schema for creating a payment.
+    Create a payment against a vaccine purchase.
 
-    Note: vaccine_purchase_id and received_by_id are auto-populated.
+    `vaccine_purchase_id` and `received_by_id` are populated from the URL path
+    and authenticated user — do not include in the request body.
+    `patient_id` is also populated from the URL path (or resolved from the
+    purchase) — do not include in the request body.
     """
-
-    # These will be set from URL path parameter and authenticated user
-    vaccine_purchase_id: Optional[uuid.UUID] = None
-    received_by_id: Optional[uuid.UUID] = None
+    vaccine_purchase_id: Optional[uuid.UUID] = None   # set from URL path
+    # FIX: added patient_id — Payment model now has a direct patient_id FK
+    # for efficient billing queries and row-level security.
+    patient_id:          Optional[uuid.UUID] = None   # set from URL path / service
+    received_by_id:      Optional[uuid.UUID] = None   # set from auth context
 
 
 class PaymentResponseSchema(PaymentBaseSchema):
-    """Schema for payment response."""
+    """Payment transaction response."""
 
-    id: uuid.UUID
+    id:                  uuid.UUID
     vaccine_purchase_id: uuid.UUID
-    received_by_id: Optional[uuid.UUID] = None
-    created_at: datetime
+    # FIX: added patient_id — Payment model now carries a direct patient_id FK.
+    # Exposing it in the response allows API consumers to navigate directly to
+    # the patient without an extra round-trip through the purchase.
+    patient_id:          uuid.UUID
+    received_by_id:      Optional[uuid.UUID] = None
+    created_at:          datetime
 
     model_config = {"from_attributes": True}

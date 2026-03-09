@@ -1,34 +1,48 @@
+"""
+Patient routes.
+"""
+
 import traceback
 import uuid
+from math import ceil
 from typing import Optional
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.dependencies import get_db
 from app.core.pagination import (
+    PageInfo,
     PaginatedResponse,
     PaginationParams,
     get_pagination_params,
 )
 from app.core.permission_checker import require_staff_or_admin
+from app.core.utils import logger
 from app.models.user_model import User
 from app.schemas.patient_schemas import (
-    PregnantPatientCreateSchema,
-    PregnantPatientUpdateSchema,
-    PregnantPatientResponseSchema,
-    RegularPatientCreateSchema,
-    RegularPatientUpdateSchema,
-    RegularPatientResponseSchema,
     ConvertToRegularPatientSchema,
+    PregnancyCloseSchema,
+    PregnancyCreateSchema,
+    PregnancyResponseSchema,
+    PregnancyUpdateSchema,
+    PregnantPatientCreateSchema,
+    PregnantPatientResponseSchema,
+    PregnantPatientUpdateSchema,
+    RegularPatientCreateSchema,
+    RegularPatientResponseSchema,
+    RegularPatientUpdateSchema,
 )
 from app.services.patient_service import PatientService
-from app.core.utils import logger
 
 
 router = APIRouter(prefix="/patients", tags=["patients"])
 
 
-# ============= Pregnant Patient Routes =============
+# =============================================================================
+# Pregnant patient
+# =============================================================================
+
 @router.post(
     "/pregnant",
     response_model=PregnantPatientResponseSchema,
@@ -40,66 +54,51 @@ async def create_pregnant_patient(
     current_user: User = Depends(require_staff_or_admin()),
 ):
     """
-    Create a new pregnant patient.
+    Register a new pregnant patient together with her first pregnancy episode.
 
-    Args:
-        patient_data: Pregnant patient creation data
-        db: Database session
-        current_user: Authenticated admin or staff user
-
-    Returns:
-        PregnantPatientResponseSchema: Created patient information
+    `facility_id` and `created_by_id` are set automatically from the
+    authenticated user — do not include them in the request body.
     """
     service = PatientService(db)
     try:
-        # Set facility_id and created_by_id from authenticated user
         patient_data.facility_id = current_user.facility_id
         patient_data.created_by_id = current_user.id
+        patient_data.first_pregnancy.patient_id = None  # will be set after insert
+
         patient = await service.create_pregnant_patient(patient_data)
 
-        logger.log_info(
-            {
-                "event": "pregnant_patient_created",
-                "patient_id": str(patient.id),
-                "created_by": str(current_user.id),
-                "facility_id": str(patient.facility_id),
-            }
-        )
+        logger.log_info({
+            "event": "pregnant_patient_created",
+            "patient_id": str(patient.id),
+            "created_by": str(current_user.id),
+            "facility_id": str(patient.facility_id),
+        })
 
-        return PregnantPatientResponseSchema.from_patient(
-            patient
-        )
+        return PregnantPatientResponseSchema.from_patient(patient)
 
     except HTTPException:
         raise
 
     except ValueError as e:
-        logger.log_warning(
-            {
-                "event": "pregnant_patient_creation_failed",
-                "reason": "validation_error",
-                "error": str(e),
-                "created_by": str(current_user.id),
-            }
-        )
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e),
-        )
+        logger.log_warning({
+            "event": "pregnant_patient_creation_failed",
+            "reason": "validation_error",
+            "error": str(e),
+            "created_by": str(current_user.id),
+        })
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
     except Exception as e:
-        logger.log_error(
-            {
-                "event": "pregnant_patient_creation_error",
-                "error": str(e),
-                "error_type": type(e).__name__,
-                "traceback": traceback.format_exc(),
-                "created_by": str(current_user.id),
-            }
-        )
+        logger.log_error({
+            "event": "pregnant_patient_creation_error",
+            "error": str(e),
+            "error_type": type(e).__name__,
+            "traceback": traceback.format_exc(),
+            "created_by": str(current_user.id),
+        })
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred while creating patient",
+            detail="An unexpected error occurred while creating the patient.",
         )
 
 
@@ -109,40 +108,25 @@ async def get_pregnant_patient(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_staff_or_admin()),
 ):
-    """
-    Get pregnant patient by ID.
-
-    Args:
-        patient_id: Patient UUID
-        db: Database session
-        current_user: Authenticated admin or staff user
-
-    Returns:
-        PregnantPatientResponseSchema: Patient information
-    """
+    """Get a pregnant patient by ID."""
     service = PatientService(db)
     try:
         patient = await service.get_pregnant_patient(patient_id)
-        return PregnantPatientResponseSchema.from_patient(
-            patient
-        )
+        return PregnantPatientResponseSchema.from_patient(patient)
 
     except HTTPException:
         raise
 
     except Exception as e:
-        logger.log_error(
-            {
-                "event": "get_pregnant_patient_error",
-                "patient_id": str(patient_id),
-                "error": str(e),
-                "user_id": str(current_user.id),
-            },
-            exc_info=True,
-        )
+        logger.log_error({
+            "event": "get_pregnant_patient_error",
+            "patient_id": str(patient_id),
+            "error": str(e),
+            "user_id": str(current_user.id),
+        }, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An error occurred while retrieving patient",
+            detail="An error occurred while retrieving the patient.",
         )
 
 
@@ -154,35 +138,24 @@ async def update_pregnant_patient(
     current_user: User = Depends(require_staff_or_admin()),
 ):
     """
-    Update pregnant patient (Staff only).
+    Update patient-level fields on a pregnant patient.
 
-    Args:
-        patient_id: Patient UUID
-        update_data: Update data
-        db: Database session
-        current_user: Authenticated staff user
-
-    Returns:
-        PregnantPatientResponseSchema: Updated patient information
+    To update pregnancy clinical data (dates, gestational age, risk factors)
+    use PATCH /pregnancies/{pregnancy_id} instead.
     """
     service = PatientService(db)
-    updated_by_id = current_user.id
     try:
         patient = await service.update_pregnant_patient(
-            updated_by_id, patient_id, update_data
+            current_user.id, patient_id, update_data
         )
 
-        logger.log_info(
-            {
-                "event": "pregnant_patient_updated",
-                "patient_id": str(patient_id),
-                "updated_by": str(current_user.id),
-            }
-        )
+        logger.log_info({
+            "event": "pregnant_patient_updated",
+            "patient_id": str(patient_id),
+            "updated_by": str(current_user.id),
+        })
 
-        return PregnantPatientResponseSchema.from_patient(
-            patient
-        )
+        return PregnantPatientResponseSchema.from_patient(patient)
 
     except HTTPException:
         raise
@@ -191,18 +164,15 @@ async def update_pregnant_patient(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
     except Exception as e:
-        logger.log_error(
-            {
-                "event": "update_pregnant_patient_error",
-                "patient_id": str(patient_id),
-                "error": str(e),
-                "user_id": str(current_user.id),
-            },
-            exc_info=True,
-        )
+        logger.log_error({
+            "event": "update_pregnant_patient_error",
+            "patient_id": str(patient_id),
+            "error": str(e),
+            "user_id": str(current_user.id),
+        }, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An error occurred while updating patient",
+            detail="An error occurred while updating the patient.",
         )
 
 
@@ -217,55 +187,240 @@ async def convert_to_regular_patient(
     current_user: User = Depends(require_staff_or_admin()),
 ):
     """
-    Convert pregnant patient to regular patient after delivery (Staff only).
+    Convert a pregnant patient to a regular patient after delivery.
 
-    Args:
-        patient_id: Patient UUID
-        conversion_data: Conversion data
-        db: Database session
-        current_user: Authenticated staff user
-
-    Returns:
-        RegularPatientResponseSchema: Converted patient information
+    Closes the active pregnancy with the provided outcome, then transitions
+    the patient into the long-term HIV treatment pathway.
     """
     service = PatientService(db)
     try:
-        user_id = current_user.id
-        patient = await service.convert_to_regular_patient(user_id, patient_id, conversion_data)
-
-        logger.log_info(
-            {
-                "event": "patient_converted_to_regular",
-                "pregnant_patient_id": str(patient_id),
-                "regular_patient_id": str(patient.id),
-                "converted_by": str(current_user.id),
-            }
+        patient = await service.convert_to_regular_patient(
+            current_user.id, patient_id, conversion_data
         )
 
-        return RegularPatientResponseSchema.from_patient(
-            patient
-        )
+        logger.log_info({
+            "event": "patient_converted_to_regular",
+            "patient_id": str(patient_id),
+            "converted_by": str(current_user.id),
+        })
+
+        return RegularPatientResponseSchema.from_patient(patient)
 
     except HTTPException:
         raise
 
     except Exception as e:
-        logger.log_error(
-            {
-                "event": "patient_conversion_error",
-                "patient_id": str(patient_id),
-                "error": str(e),
-                "user_id": str(current_user.id),
-            },
-            exc_info=True,
-        )
+        logger.log_error({
+            "event": "patient_conversion_error",
+            "patient_id": str(patient_id),
+            "error": str(e),
+            "user_id": str(current_user.id),
+        }, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An error occurred during patient conversion",
+            detail="An error occurred during patient conversion.",
         )
 
 
-# ============= Regular Patient Routes =============
+# =============================================================================
+# Pregnancy episodes  (nested under /patients/pregnant and standalone)
+# =============================================================================
+
+@router.post(
+    "/pregnant/{patient_id}/pregnancies",
+    response_model=PregnancyResponseSchema,
+    status_code=status.HTTP_201_CREATED,
+)
+async def open_pregnancy(
+    patient_id: uuid.UUID,
+    pregnancy_data: PregnancyCreateSchema,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_staff_or_admin()),
+):
+    """
+    Open a new pregnancy episode for a returning pregnant patient.
+
+    Used when a patient who has previously delivered becomes pregnant again.
+    Returns 400 if she already has an active pregnancy.
+    """
+    service = PatientService(db)
+    try:
+        pregnancy_data.patient_id = patient_id
+        pregnancy = await service.open_pregnancy(patient_id, pregnancy_data)
+
+        logger.log_info({
+            "event": "pregnancy_opened",
+            "pregnancy_id": str(pregnancy.id),
+            "patient_id": str(patient_id),
+            "created_by": str(current_user.id),
+        })
+
+        return PregnancyResponseSchema.model_validate(pregnancy)
+
+    except HTTPException:
+        raise
+
+    except Exception as e:
+        logger.log_error({
+            "event": "open_pregnancy_error",
+            "patient_id": str(patient_id),
+            "error": str(e),
+            "user_id": str(current_user.id),
+        }, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An error occurred while opening the pregnancy.",
+        )
+
+
+@router.get(
+    "/pregnant/{patient_id}/pregnancies",
+    response_model=list[PregnancyResponseSchema],
+)
+async def list_patient_pregnancies(
+    patient_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_staff_or_admin()),
+):
+    """List all pregnancy episodes for a patient, ordered chronologically."""
+    service = PatientService(db)
+    try:
+        pregnancies = await service.list_patient_pregnancies(patient_id)
+        return [PregnancyResponseSchema.model_validate(p) for p in pregnancies]
+
+    except HTTPException:
+        raise
+
+    except Exception as e:
+        logger.log_error({
+            "event": "list_pregnancies_error",
+            "patient_id": str(patient_id),
+            "error": str(e),
+            "user_id": str(current_user.id),
+        }, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An error occurred while retrieving pregnancies.",
+        )
+
+
+@router.get("/pregnancies/{pregnancy_id}", response_model=PregnancyResponseSchema)
+async def get_pregnancy(
+    pregnancy_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_staff_or_admin()),
+):
+    """Get a single pregnancy episode by ID."""
+    service = PatientService(db)
+    try:
+        pregnancy = await service.get_pregnancy(pregnancy_id)
+        return PregnancyResponseSchema.model_validate(pregnancy)
+
+    except HTTPException:
+        raise
+
+    except Exception as e:
+        logger.log_error({
+            "event": "get_pregnancy_error",
+            "pregnancy_id": str(pregnancy_id),
+            "error": str(e),
+            "user_id": str(current_user.id),
+        }, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An error occurred while retrieving the pregnancy.",
+        )
+
+
+@router.patch("/pregnancies/{pregnancy_id}", response_model=PregnancyResponseSchema)
+async def update_pregnancy(
+    pregnancy_id: uuid.UUID,
+    update_data: PregnancyUpdateSchema,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_staff_or_admin()),
+):
+    """
+    Update clinical data on an active pregnancy episode.
+
+    Returns 400 if the pregnancy is already closed.
+    """
+    service = PatientService(db)
+    try:
+        pregnancy = await service.update_pregnancy(pregnancy_id, update_data)
+
+        logger.log_info({
+            "event": "pregnancy_updated",
+            "pregnancy_id": str(pregnancy_id),
+            "updated_by": str(current_user.id),
+        })
+
+        return PregnancyResponseSchema.model_validate(pregnancy)
+
+    except HTTPException:
+        raise
+
+    except Exception as e:
+        logger.log_error({
+            "event": "update_pregnancy_error",
+            "pregnancy_id": str(pregnancy_id),
+            "error": str(e),
+            "user_id": str(current_user.id),
+        }, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An error occurred while updating the pregnancy.",
+        )
+
+
+@router.post("/pregnancies/{pregnancy_id}/close", response_model=PregnancyResponseSchema)
+async def close_pregnancy(
+    pregnancy_id: uuid.UUID,
+    close_data: PregnancyCloseSchema,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_staff_or_admin()),
+):
+    """
+    Close an active pregnancy with a clinical outcome.
+
+    Records the outcome (LIVE_BIRTH, STILLBIRTH, MISCARRIAGE, ABORTION, ECTOPIC)
+    and delivery date. Increments `para` on the patient when appropriate.
+    Returns 400 if the pregnancy is already closed.
+    """
+    service = PatientService(db)
+    try:
+        pregnancy = await service.close_pregnancy(
+            pregnancy_id, close_data, current_user.id
+        )
+
+        logger.log_info({
+            "event": "pregnancy_closed",
+            "pregnancy_id": str(pregnancy_id),
+            "outcome": close_data.outcome.value,
+            "closed_by": str(current_user.id),
+        })
+
+        return PregnancyResponseSchema.model_validate(pregnancy)
+
+    except HTTPException:
+        raise
+
+    except Exception as e:
+        logger.log_error({
+            "event": "close_pregnancy_error",
+            "pregnancy_id": str(pregnancy_id),
+            "error": str(e),
+            "user_id": str(current_user.id),
+        }, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An error occurred while closing the pregnancy.",
+        )
+
+
+# =============================================================================
+# Regular patient
+# =============================================================================
+
 @router.post(
     "/regular",
     response_model=RegularPatientResponseSchema,
@@ -277,67 +432,50 @@ async def create_regular_patient(
     current_user: User = Depends(require_staff_or_admin()),
 ):
     """
-    Create a new regular patient.
+    Register a new regular (non-pregnant) patient.
 
-    Args:
-        patient_data: Regular patient creation data
-        db: Database session
-        current_user: Authenticated admin or staff user
-
-    Returns:
-        RegularPatientResponseSchema: Created patient information
+    `facility_id` and `created_by_id` are set automatically from the
+    authenticated user.
     """
     service = PatientService(db)
     try:
-        # Set facility_id and created_by_id from authenticated user
         patient_data.facility_id = current_user.facility_id
         patient_data.created_by_id = current_user.id
 
         patient = await service.create_regular_patient(patient_data)
 
-        logger.log_info(
-            {
-                "event": "regular_patient_created",
-                "patient_id": str(patient.id),
-                "created_by": str(current_user.id),
-                "facility_id": str(patient.facility_id),
-            }
-        )
+        logger.log_info({
+            "event": "regular_patient_created",
+            "patient_id": str(patient.id),
+            "created_by": str(current_user.id),
+            "facility_id": str(patient.facility_id),
+        })
 
-        return RegularPatientResponseSchema.from_patient(
-            patient
-        )
+        return RegularPatientResponseSchema.from_patient(patient)
 
     except HTTPException:
         raise
 
     except ValueError as e:
-        logger.log_warning(
-            {
-                "event": "regular_patient_creation_failed",
-                "reason": "validation_error",
-                "error": str(e),
-                "created_by": str(current_user.id),
-            }
-        )
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e),
-        )
+        logger.log_warning({
+            "event": "regular_patient_creation_failed",
+            "reason": "validation_error",
+            "error": str(e),
+            "created_by": str(current_user.id),
+        })
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
     except Exception as e:
-        logger.log_error(
-            {
-                "event": "regular_patient_creation_error",
-                "error": str(e),
-                "error_type": type(e).__name__,
-                "traceback": traceback.format_exc(),
-                "created_by": str(current_user.id),
-            }
-        )
+        logger.log_error({
+            "event": "regular_patient_creation_error",
+            "error": str(e),
+            "error_type": type(e).__name__,
+            "traceback": traceback.format_exc(),
+            "created_by": str(current_user.id),
+        })
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred while creating patient",
+            detail="An unexpected error occurred while creating the patient.",
         )
 
 
@@ -347,38 +485,26 @@ async def get_regular_patient(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_staff_or_admin()),
 ):
-    """
-    Get regular patient by ID (Staff only).
-
-    Args:
-        patient_id: Patient UUID
-        db: Database session
-        current_user: Authenticated staff user
-
-    Returns:
-        RegularPatientResponseSchema: Patient information
-    """
+    """Get a regular patient by ID."""
     service = PatientService(db)
     try:
         patient = await service.get_regular_patient(patient_id)
-        return PregnantPatientResponseSchema.from_patient(patient)
+        # FIX: original incorrectly returned PregnantPatientResponseSchema here.
+        return RegularPatientResponseSchema.from_patient(patient)
 
     except HTTPException:
         raise
 
     except Exception as e:
-        logger.log_error(
-            {
-                "event": "get_regular_patient_error",
-                "patient_id": str(patient_id),
-                "error": str(e),
-                "user_id": str(current_user.id),
-            },
-            exc_info=True,
-        )
+        logger.log_error({
+            "event": "get_regular_patient_error",
+            "patient_id": str(patient_id),
+            "error": str(e),
+            "user_id": str(current_user.id),
+        }, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An error occurred while retrieving patient",
+            detail="An error occurred while retrieving the patient.",
         )
 
 
@@ -389,35 +515,20 @@ async def update_regular_patient(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_staff_or_admin()),
 ):
-    """
-    Update regular patient (Staff or admin only).
-
-    Args:
-        patient_id: Patient UUID
-        update_data: Update data
-        db: Database session
-        current_user: Authenticated staff user
-
-    Returns:
-        RegularPatientResponseSchema: Updated patient information
-    """
+    """Update a regular patient."""
     service = PatientService(db)
-    updated_by_id = current_user.id
-
     try:
-        patient = await service.update_regular_patient(updated_by_id, patient_id, update_data)
-
-        logger.log_info(
-            {
-                "event": "regular_patient_updated",
-                "patient_id": str(patient_id),
-                "updated_by": str(current_user.id),
-            }
+        patient = await service.update_regular_patient(
+            current_user.id, patient_id, update_data
         )
 
-        return RegularPatientResponseSchema.from_patient(
-            patient
-        )
+        logger.log_info({
+            "event": "regular_patient_updated",
+            "patient_id": str(patient_id),
+            "updated_by": str(current_user.id),
+        })
+
+        return RegularPatientResponseSchema.from_patient(patient)
 
     except HTTPException:
         raise
@@ -426,22 +537,22 @@ async def update_regular_patient(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
     except Exception as e:
-        logger.log_error(
-            {
-                "event": "update_regular_patient_error",
-                "patient_id": str(patient_id),
-                "error": str(e),
-                "user_id": str(current_user.id),
-            },
-            exc_info=True,
-        )
+        logger.log_error({
+            "event": "update_regular_patient_error",
+            "patient_id": str(patient_id),
+            "error": str(e),
+            "user_id": str(current_user.id),
+        }, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An error occurred while updating patient",
+            detail="An error occurred while updating the patient.",
         )
 
 
-# ============= Common Patient Routes =============
+# =============================================================================
+# Common patient
+# =============================================================================
+
 @router.get(
     "",
     response_model=PaginatedResponse[
@@ -456,33 +567,10 @@ async def list_patients(
     patient_type: Optional[str] = None,
     patient_status: Optional[str] = None,
 ):
-    """
-    Get paginated list of patients with filters (Staff only).
-
-    Args:
-        db: Database session
-        current_user: Authenticated staff user
-        pagination: Pagination parameters
-        facility_id: Filter by facility
-        patient_type: Filter by patient type (pregnant/regular)
-        patient_status: Filter by patient status
-
-    Returns:
-        PaginatedResponse: Paginated list of patients
-    """
+    """Paginated list of patients with optional filters."""
     try:
-        from app.services.patient_service import PatientService
-        from app.schemas.patient_schemas import (
-            PregnantPatientResponseSchema,
-            RegularPatientResponseSchema,
-        )
-        from app.core.pagination import PageInfo, PaginatedResponse
-        from math import ceil
-
-        # Initialize service
         patient_service = PatientService(db)
 
-        # Get paginated patients from service
         patients, total_count = await patient_service.list_patients_paginated(
             facility_id=facility_id,
             patient_type=patient_type,
@@ -491,7 +579,6 @@ async def list_patients(
             page_size=pagination.page_size,
         )
 
-        # Convert each patient to appropriate schema based on patient_type
         validated_items = []
         for patient in patients:
             if patient.patient_type == "pregnant":
@@ -500,12 +587,9 @@ async def list_patients(
                 )
             else:
                 validated_items.append(
-                    RegularPatientResponseSchema.from_patient(
-                        patient
-                    )
+                    RegularPatientResponseSchema.from_patient(patient)
                 )
 
-        # Build pagination metadata
         total_pages = ceil(total_count / pagination.page_size) if total_count > 0 else 0
         has_next = pagination.page < total_pages
         has_previous = pagination.page > 1
@@ -521,40 +605,33 @@ async def list_patients(
             previous_page=pagination.page - 1 if has_previous else None,
         )
 
-        # Create response
-        response = PaginatedResponse(items=validated_items, page_info=page_info)
+        logger.log_info({
+            "event": "patients_listed",
+            "user_id": str(current_user.id),
+            "page": pagination.page,
+            "total_items": total_count,
+            "filters": {
+                "facility_id": str(facility_id) if facility_id else None,
+                "patient_type": patient_type,
+                "patient_status": patient_status,
+            },
+        })
 
-        logger.log_info(
-            {
-                "event": "patients_listed",
-                "user_id": str(current_user.id),
-                "page": pagination.page,
-                "total_items": total_count,
-                "filters": {
-                    "facility_id": str(facility_id) if facility_id else None,
-                    "patient_type": patient_type,
-                    "patient_status": patient_status,
-                },
-            }
-        )
-
-        return response
+        return PaginatedResponse(items=validated_items, page_info=page_info)
 
     except HTTPException:
         raise
+
     except Exception as e:
-        logger.log_error(
-            {
-                "event": "list_patients_error",
-                "error": str(e),
-                "error_type": type(e).__name__,
-                "user_id": str(current_user.id),
-            },
-            exc_info=True,
-        )
+        logger.log_error({
+            "event": "list_patients_error",
+            "error": str(e),
+            "error_type": type(e).__name__,
+            "user_id": str(current_user.id),
+        }, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An error occurred while retrieving patients",
+            detail="An error occurred while retrieving patients.",
         )
 
 
@@ -564,40 +641,28 @@ async def delete_patient(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_staff_or_admin()),
 ):
-    """
-    Soft delete a patient (Staff only).
-
-    Args:
-        patient_id: Patient UUID
-        db: Database session
-        current_user: Authenticated staff user
-    """
+    """Soft delete a patient."""
     service = PatientService(db)
     try:
         await service.delete_patient(patient_id)
 
-        logger.log_security_event(
-            {
-                "event_type": "patient_deleted",
-                "patient_id": str(patient_id),
-                "deleted_by": str(current_user.id),
-            }
-        )
+        logger.log_security_event({
+            "event_type": "patient_deleted",
+            "patient_id": str(patient_id),
+            "deleted_by": str(current_user.id),
+        })
 
     except HTTPException:
         raise
 
     except Exception as e:
-        logger.log_error(
-            {
-                "event": "delete_patient_error",
-                "patient_id": str(patient_id),
-                "error": str(e),
-                "user_id": str(current_user.id),
-            },
-            exc_info=True,
-        )
+        logger.log_error({
+            "event": "delete_patient_error",
+            "patient_id": str(patient_id),
+            "error": str(e),
+            "user_id": str(current_user.id),
+        }, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An error occurred while deleting patient",
+            detail="An error occurred while deleting the patient.",
         )

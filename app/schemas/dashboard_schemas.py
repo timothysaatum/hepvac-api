@@ -103,12 +103,25 @@ class RevenueFilters(BaseModel):
     model_config = {"from_attributes": True}
 
 
+# FIX: replaced List[dict] with a properly typed schema so the API contract
+# is explicit and Pydantic can validate/serialise the field correctly.
+class PaymentMethodBreakdown(BaseModel):
+    """Revenue broken down by payment method."""
+    method: str        # e.g. "cash", "mobile_money", "bank_transfer"
+    total: Decimal
+    count: int
+
+    model_config = {"from_attributes": True}
+
+
 class RevenueAnalyticsResponse(BaseModel):
     """Response for revenue analytics."""
     
     total_revenue: Decimal
     yearly_breakdown: List[RevenueByYear]
-    payment_methods: List[dict]  # [{"method": "cash", "total": 1000, "count": 50}]
+    # FIX: was List[dict] — untyped, no validation, no IDE support.
+    # Replaced with List[PaymentMethodBreakdown].
+    payment_methods: List[PaymentMethodBreakdown]
     
     model_config = {"from_attributes": True}
 
@@ -155,13 +168,23 @@ class PatientGrowthItem(BaseModel):
     model_config = {"from_attributes": True}
 
 
+# FIX: replaced List[dict] for patients_by_status with a typed schema.
+class PatientStatusCount(BaseModel):
+    """Count of patients by status."""
+    status: str   # e.g. "active", "inactive", "postpartum", "completed"
+    count: int
+
+    model_config = {"from_attributes": True}
+
+
 class PatientAnalyticsResponse(BaseModel):
     """Response for patient analytics."""
     
     total_patients: int
     active_patients: int
     growth_data: List[PatientGrowthItem]
-    patients_by_status: List[dict]  # [{"status": "active", "count": 100}]
+    # FIX: was List[dict] — untyped. Replaced with List[PatientStatusCount].
+    patients_by_status: List[PatientStatusCount]
     average_age: float
     
     model_config = {"from_attributes": True}
@@ -216,6 +239,9 @@ class VaccinationTrendItem(BaseModel):
     month: int
     month_name: str
     total_vaccinations: int
+    # NOTE: These three fields assume a fixed 3-dose schedule.
+    # If DoseType is later extended beyond 3 doses, this schema
+    # will need to be updated to a dynamic List[DoseTrendItem].
     first_dose: int
     second_dose: int
     third_dose: int

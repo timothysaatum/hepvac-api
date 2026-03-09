@@ -14,6 +14,7 @@ from app.schemas.search_schemas import (
     PaymentSearchResult,
     PaymentSearchResponse,
 )
+from decimal import Decimal
 from app.models.patient_model import Patient, Vaccination, Payment
 
 
@@ -26,19 +27,19 @@ class SearchService:
 
     # ============= Patient Search =============
     async def search_patients(
-        self,
-        filters: PatientSearchFilters,
-        page: int = 1,
-        page_size: int = 10,
+            self,
+            filters: PatientSearchFilters,
+            page: int = 1,
+            page_size: int = 10,
     ) -> PatientSearchResponse:
         """
         Search patients with pagination.
-        
+
         Args:
             filters: Patient search filters
             page: Page number (starts at 1)
             page_size: Items per page
-            
+
         Returns:
             PatientSearchResponse with paginated results
         """
@@ -48,16 +49,16 @@ class SearchService:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Page number must be greater than 0",
             )
-        
+
         if page_size < 1 or page_size > 100:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Page size must be between 1 and 100",
             )
-        
+
         # Calculate skip
         skip = (page - 1) * page_size
-        
+
         # Search patients
         patients, total_count = await self.repo.search_patients(
             name=filters.name,
@@ -73,15 +74,15 @@ class SearchService:
             skip=skip,
             limit=page_size,
         )
-        
+
         # Convert to response models
         items = [self._patient_to_search_result(p) for p in patients]
-        
+
         # Calculate pagination info
         total_pages = math.ceil(total_count / page_size) if total_count > 0 else 0
         has_next = page < total_pages
         has_previous = page > 1
-        
+
         return PatientSearchResponse(
             items=items,
             total_count=total_count,
@@ -91,7 +92,7 @@ class SearchService:
             has_next=has_next,
             has_previous=has_previous,
         )
-    
+
     def _patient_to_search_result(self, patient: Patient) -> PatientSearchResult:
         """Convert Patient model to PatientSearchResult."""
         result_dict = {
@@ -105,33 +106,35 @@ class SearchService:
             "facility_id": patient.facility_id,
             "created_at": patient.created_at,
         }
-        
+
         # Add type-specific fields
         if patient.patient_type == "pregnant":
-            result_dict["expected_delivery_date"] = patient.expected_delivery_date
-            result_dict["actual_delivery_date"] = patient.actual_delivery_date
+            result_dict[
+                "expected_delivery_date"] = patient.active_pregnancy.expected_delivery_date if patient.active_pregnancy else None
+            result_dict[
+                "actual_delivery_date"] = patient.active_pregnancy.actual_delivery_date if patient.active_pregnancy else None
         elif patient.patient_type == "regular":
             result_dict["diagnosis_date"] = patient.diagnosis_date
             result_dict["treatment_start_date"] = patient.treatment_start_date
             result_dict["viral_load"] = patient.viral_load
-        
+
         return PatientSearchResult(**result_dict)
 
     # ============= Vaccination Search =============
     async def search_vaccinations(
-        self,
-        filters: VaccinationSearchFilters,
-        page: int = 1,
-        page_size: int = 10,
+            self,
+            filters: VaccinationSearchFilters,
+            page: int = 1,
+            page_size: int = 10,
     ) -> VaccinationSearchResponse:
         """
         Search vaccinations with pagination.
-        
+
         Args:
             filters: Vaccination search filters
             page: Page number (starts at 1)
             page_size: Items per page
-            
+
         Returns:
             VaccinationSearchResponse with paginated results
         """
@@ -141,16 +144,16 @@ class SearchService:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Page number must be greater than 0",
             )
-        
+
         if page_size < 1 or page_size > 100:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Page size must be between 1 and 100",
             )
-        
+
         # Calculate skip
         skip = (page - 1) * page_size
-        
+
         # Search vaccinations
         vaccinations, total_count = await self.repo.search_vaccinations(
             patient_id=filters.patient_id,
@@ -166,15 +169,15 @@ class SearchService:
             skip=skip,
             limit=page_size,
         )
-        
+
         # Convert to response models
         items = [self._vaccination_to_search_result(v) for v in vaccinations]
-        
+
         # Calculate pagination info
         total_pages = math.ceil(total_count / page_size) if total_count > 0 else 0
         has_next = page < total_pages
         has_previous = page > 1
-        
+
         return VaccinationSearchResponse(
             items=items,
             total_count=total_count,
@@ -184,7 +187,7 @@ class SearchService:
             has_next=has_next,
             has_previous=has_previous,
         )
-    
+
     def _vaccination_to_search_result(self, vaccination: Vaccination) -> VaccinationSearchResult:
         """Convert Vaccination model to VaccinationSearchResult."""
         return VaccinationSearchResult(
@@ -205,19 +208,19 @@ class SearchService:
 
     # ============= Payment Search =============
     async def search_payments(
-        self,
-        filters: PaymentSearchFilters,
-        page: int = 1,
-        page_size: int = 10,
+            self,
+            filters: PaymentSearchFilters,
+            page: int = 1,
+            page_size: int = 10,
     ) -> PaymentSearchResponse:
         """
         Search payments with pagination.
-        
+
         Args:
             filters: Payment search filters
             page: Page number (starts at 1)
             page_size: Items per page
-            
+
         Returns:
             PaymentSearchResponse with paginated results
         """
@@ -227,16 +230,16 @@ class SearchService:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Page number must be greater than 0",
             )
-        
+
         if page_size < 1 or page_size > 100:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Page size must be between 1 and 100",
             )
-        
+
         # Calculate skip
         skip = (page - 1) * page_size
-        
+
         # Search payments
         payments, total_count, total_amount = await self.repo.search_payments(
             patient_id=filters.patient_id,
@@ -254,26 +257,26 @@ class SearchService:
             skip=skip,
             limit=page_size,
         )
-        
+
         # Convert to response models
         items = [self._payment_to_search_result(p) for p in payments]
-        
+
         # Calculate pagination info
         total_pages = math.ceil(total_count / page_size) if total_count > 0 else 0
         has_next = page < total_pages
         has_previous = page > 1
-        
+
         return PaymentSearchResponse(
             items=items,
             total_count=total_count,
-            total_amount=total_amount,
+            total_amount=Decimal(total_amount),
             page=page,
             page_size=page_size,
             total_pages=total_pages,
             has_next=has_next,
             has_previous=has_previous,
         )
-    
+
     def _payment_to_search_result(self, payment: Payment) -> PaymentSearchResult:
         """Convert Payment model to PaymentSearchResult."""
         return PaymentSearchResult(

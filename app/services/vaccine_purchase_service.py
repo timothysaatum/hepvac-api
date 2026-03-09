@@ -6,11 +6,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.vaccine_model import PatientVaccinePurchase
 from app.models.patient_model import Payment, Vaccination
 from app.repositories.vaccine_purchase_repo import VaccinePurchaseRepository
-from app.schemas.patient_schemas import DoseType
+from app.schemas.patient_schemas import DoseType, PaymentStatus
 from app.schemas.vaccine_schemas import (
-    PatientVaccinePurchaseCreateSchema, 
-    PatientVaccinePurchaseUpdateSchema, 
-    PaymentCreateSchema, 
+    PatientVaccinePurchaseCreateSchema,
+    PatientVaccinePurchaseUpdateSchema,
+    PaymentCreateSchema,
     VaccinationCreateSchema
 )
 
@@ -24,11 +24,17 @@ class VaccinePurchaseService:
 
     # ============= Vaccine Purchase Services =============
     async def create_vaccine_purchase(
-        self, purchase_data: PatientVaccinePurchaseCreateSchema
+            self, purchase_data: PatientVaccinePurchaseCreateSchema
     ) -> PatientVaccinePurchase:
         """Create a new vaccine purchase for a patient."""
 
         # Verify patient exists
+        if purchase_data.patient_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Patient not found",
+            )
+
         patient = await self.repo.get_patient_by_id(purchase_data.patient_id)
         if not patient:
             raise HTTPException(
@@ -44,11 +50,13 @@ class VaccinePurchaseService:
                 detail="Vaccine not found",
             )
 
-        # Check vaccine stock
-        if vaccine.quantity < purchase_data.total_doses:
+        # Check vaccine availability against unreserved stock only.
+        # `quantity` includes doses already committed to active purchases —
+        # use `available_quantity` to avoid double-booking stock.
+        if vaccine.available_quantity < purchase_data.total_doses:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Insufficient vaccine stock. Available: {vaccine.quantity}, Required: {purchase_data.total_doses}",
+                detail=f"Insufficient vaccine stock. Available: {vaccine.available_quantity}, Required: {purchase_data.total_doses}",
             )
 
         # Check if patient already has an active purchase for this vaccine
@@ -57,14 +65,14 @@ class VaccinePurchaseService:
         )
         for existing in existing_purchases:
             if (
-                existing.vaccine_id == purchase_data.vaccine_id
-                and not existing.is_completed()
+                    existing.vaccine_id == purchase_data.vaccine_id
+                    and not existing.is_completed()
             ):
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail=f"Patient already has an active purchase for {vaccine.vaccine_name}",
                 )
-            
+
         # Create purchase with calculated values
         purchase_dict = purchase_data.model_dump()
         total_package_price = vaccine.price_per_dose * purchase_data.total_doses
@@ -72,22 +80,24 @@ class VaccinePurchaseService:
         purchase_dict["price_per_dose"] = vaccine.price_per_dose
         purchase_dict["total_package_price"] = total_package_price
         purchase_dict["batch_number"] = vaccine.batch_number
-        purchase_dict["balance"] = total_package_price
+        # balance is a hybrid_property — never stored, never set here.
         purchase_dict["amount_paid"] = Decimal("0.00")
         purchase_dict["doses_administered"] = 0
-        purchase_dict["payment_status"] = "pending"
+        purchase_dict["payment_status"] = PaymentStatus.PENDING
 
         purchase = PatientVaccinePurchase(**purchase_dict)
         created_purchase = await self.repo.create_vaccine_purchase(purchase)
 
-        # Reserve vaccine stock
-        vaccine.quantity -= purchase_data.total_doses
+        # Reserve stock: increment reserved_quantity rather than depleting quantity.
+        # Physical stock (quantity) only decreases when doses are administered.
+        # This prevents double-booking while keeping actual inventory accurate.
+        vaccine.reserved_quantity += purchase_data.total_doses
         await self.repo.update_vaccine(vaccine)
 
         return created_purchase
 
     async def get_vaccine_purchase(
-        self, purchase_id: uuid.UUID
+            self, purchase_id: uuid.UUID
     ) -> PatientVaccinePurchase:
         """Get vaccine purchase by ID."""
         purchase = await self.repo.get_vaccine_purchase_by_id(purchase_id)
@@ -99,7 +109,7 @@ class VaccinePurchaseService:
         return purchase
 
     async def update_vaccine_purchase(
-        self, purchase_id: uuid.UUID, update_data: PatientVaccinePurchaseUpdateSchema
+            self, purchase_id: uuid.UUID, update_data: PatientVaccinePurchaseUpdateSchema
     ) -> PatientVaccinePurchase:
         """Update vaccine purchase (notes and is_active only)."""
         purchase = await self.repo.get_vaccine_purchase_by_id(purchase_id)
@@ -116,7 +126,7 @@ class VaccinePurchaseService:
         return await self.repo.update_vaccine_purchase(purchase)
 
     async def list_patient_purchases(
-        self, patient_id: uuid.UUID, active_only: bool = False
+            self, patient_id: uuid.UUID, active_only: bool = False
     ) -> List[PatientVaccinePurchase]:
         """List all vaccine purchases for a patient."""
         patient = await self.repo.get_patient_by_id(patient_id)
@@ -142,6 +152,12 @@ class VaccinePurchaseService:
         """Create a payment and update vaccine purchase balance."""
 
         # Get vaccine purchase
+        if payment_data.vaccine_purchase_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Patient not found",
+            )
+
         purchase = await self.repo.get_vaccine_purchase_by_id(
             payment_data.vaccine_purchase_id
         )
@@ -166,11 +182,14 @@ class VaccinePurchaseService:
             )
 
         # Check if purchase is already fully paid
-        if purchase.payment_status == "completed":
+        if purchase.payment_status == PaymentStatus.COMPLETED:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Vaccine purchase is already fully paid",
             )
+
+        # Set patient_id from purchase (NOT NULL constraint)
+        payment_data.patient_id = purchase.patient_id
 
         # Create payment
         payment_dict = payment_data.model_dump()
@@ -205,11 +224,17 @@ class VaccinePurchaseService:
 
     # ============= Vaccination Services =============
     async def administer_vaccination(
-        self, vaccination_data: VaccinationCreateSchema
+            self, vaccination_data: VaccinationCreateSchema
     ) -> Vaccination:
         """Administer a vaccination dose."""
 
         # Get vaccine purchase
+        if vaccination_data.vaccine_purchase_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Patient not found",
+            )
+
         purchase = await self.repo.get_vaccine_purchase_by_id(
             vaccination_data.vaccine_purchase_id
         )
@@ -259,10 +284,18 @@ class VaccinePurchaseService:
         purchase.record_dose_administered()
         await self.repo.update_vaccine_purchase(purchase)
 
+        # A dose has been physically administered: decrement both reserved_quantity
+        # (the commitment is fulfilled) and quantity (stock is consumed).
+        vaccine = await self.repo.get_vaccine_by_id(purchase.vaccine_id)
+        if vaccine:
+            vaccine.reserved_quantity = max(0, vaccine.reserved_quantity - 1)
+            vaccine.quantity = max(0, vaccine.quantity - 1)
+            await self.repo.update_vaccine(vaccine)
+
         return created_vaccination
 
     async def list_purchase_vaccinations(
-        self, purchase_id: uuid.UUID
+            self, purchase_id: uuid.UUID
     ) -> List[Vaccination]:
         """List all vaccinations for a vaccine purchase."""
         purchase = await self.repo.get_vaccine_purchase_by_id(purchase_id)

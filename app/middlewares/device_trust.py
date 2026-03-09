@@ -1,6 +1,6 @@
 import uuid
-from datetime import datetime
-from typing import Optional
+from datetime import datetime, timezone
+from typing import TYPE_CHECKING, List, Optional
 from enum import Enum
 from sqlalchemy import (
     TIMESTAMP,
@@ -14,7 +14,9 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from app.db.base import Base
-from app.models.user_model import User
+
+if TYPE_CHECKING:
+    from app.models.user_model import User
 
 
 class DeviceStatus(str, Enum):
@@ -113,9 +115,13 @@ class TrustedDevice(Base):
     )
 
     def is_expired(self) -> bool:
-        """Check if device trust has expired"""
+        """Check if device trust has expired."""
         if self.expires_at:
-            return datetime.utcnow() > self.expires_at
+            # FIX: was datetime.utcnow() which returns a naive datetime.
+            # Comparing a naive datetime to a timezone-aware `expires_at`
+            # raises TypeError in Python 3.  Use datetime.now(timezone.utc)
+            # for a consistent, timezone-aware comparison.
+            return datetime.now(timezone.utc) > self.expires_at
         return False
 
     def is_active(self) -> bool:
@@ -190,17 +196,26 @@ class GeographicRestriction(Base):
         index=True,
     )
 
-    # Allowed countries (ISO country codes)
-    allowed_countries: Mapped[list] = mapped_column(
-        Text, nullable=False
-    )  # JSON array: ["GH", "NG", "KE"]
+    # FIX: was Mapped[list] — SQLAlchemy's ORM mapper cannot infer a Python
+    # `list` type annotation to a SQL column type. The underlying column is
+    # Text storing a JSON array. The correct annotation is Mapped[str] for
+    # the raw JSON string. Deserialise with json.loads() in the service layer,
+    # or switch to JSONB (PostgreSQL-native) if richer querying is needed.
+    # e.g. allowed_countries = json.loads(restriction.allowed_countries)
+    allowed_countries: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        comment='JSON array of ISO country codes e.g. ["GH", "NG", "KE"]',
+    )
 
-    # Or blocked countries
-    blocked_countries: Mapped[Optional[list]] = mapped_column(
-        Text, nullable=True
-    )  # JSON array
+    blocked_countries: Mapped[Optional[str]] = mapped_column(
+        Text,
+        nullable=True,
+        comment="JSON array of ISO country codes to block",
+    )
 
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # FIX: added nullable=False — boolean flags should have explicit NOT NULL.
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
     created_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True),

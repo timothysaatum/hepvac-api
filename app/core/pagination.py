@@ -96,7 +96,7 @@ class Paginator:
         # Get paginated items
         paginated_query = query.offset(params.skip).limit(params.limit)
         result = await db.execute(paginated_query)
-        items = result.scalars().all()
+        items = list(result.scalars().all())
 
         # Convert to schema if provided
         if schema:
