@@ -17,7 +17,7 @@ from app.models.patient_model import (
     Child,
     Prescription,
     MedicationSchedule,
-    PatientReminder,
+    PatientReminder, Diagnosis,
 )
 from app.schemas.patient_schemas import (
     PregnantPatientCreateSchema,
@@ -36,10 +36,13 @@ from app.schemas.patient_schemas import (
     PatientReminderCreateSchema,
     PatientReminderUpdateSchema,
     ConvertToRegularPatientSchema,
+    ReRegisterAsPregnantSchema,
     PatientStatus,
-    PatientType,
+    PatientType, DiagnosisCreateSchema, DiagnosisUpdateSchema,
 )
 from app.repositories.patient_repo import PatientRepository
+from app.services.reminder_schedule import build_reminder_rows, cancel_pending_reminders
+from app.schemas.patient_schemas import ReminderType
 
 
 class PatientService:
@@ -105,12 +108,32 @@ class PatientService:
             pregnancy.notes = first_preg_data.notes
 
         # create_pregnant_patient cascades the Pregnancy via the relationship.
-        return await self.repo.create_pregnant_patient(db_patient)
+        created = await self.repo.create_pregnant_patient(db_patient)
+
+        # Generate delivery reminders immediately if EDD was provided at registration
+        if first_preg_data.expected_delivery_date:
+            rows = build_reminder_rows(
+                patient_id=created.id,
+                due_date=first_preg_data.expected_delivery_date,
+                reminder_type=ReminderType.DELIVERY_WEEK,
+                patient_name=created.name,
+            )
+            if rows:
+                await self.repo.bulk_create_reminders(rows)
+
+        return created
 
     async def get_pregnant_patient(self, patient_id: uuid.UUID) -> PregnantPatient:
         """Get pregnant patient by ID."""
         patient = await self.repo.get_pregnant_patient_by_id(patient_id)
         if not patient:
+            # Distinguish converted vs never-existed so the frontend can redirect.
+            base = await self.repo.get_patient_by_id(patient_id)
+            if base:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Patient has been converted to a regular patient.",
+                )
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Pregnant patient not found.",
@@ -204,38 +227,73 @@ class PatientService:
                 )
             await self.repo.update_pregnant_patient(user_id, pregnant_patient)
 
-        # Step 2 & 3: change the discriminator and insert the RegularPatient row
-        # with the SAME primary key so all FK-linked records stay intact.
+        # Steps 2 & 3: raw SQL to avoid ORM INSERT on the existing patients row.
         #
-        # SQLAlchemy joined-table inheritance requires:
-        #   a. Update patient_type on the base patients row.
-        #   b. Insert a row into regular_patients with the same id.
-        #   c. The pregnant_patients row is kept (Pregnancy/Child history lives there).
-        #
-        # We do this at the ORM level by directly modifying the discriminator
-        # and adding the new subtype row.
-        pregnant_patient.patient_type = PatientType.REGULAR
-        pregnant_patient.status = PatientStatus.POSTPARTUM
-        pregnant_patient.updated_by_id = user_id
+        # db.add(RegularPatient(id=existing_id)) looks new to SQLAlchemy's identity
+        # map → it emits INSERT INTO patients with nulls → NOT NULL violation on name.
+        # The patients row already exists; we only need to:
+        #   a. UPDATE the discriminator column.
+        #   b. INSERT into regular_patients (subtype table only).
+        from sqlalchemy import text as _text, select as _select
 
         delivery_date = conversion_data.actual_delivery_date or (
             active_pregnancy.actual_delivery_date if active_pregnancy else None
         )
 
-        regular_patient = RegularPatient(
-            id=patient_id,                               # same PK — keeps all FKs intact
-            diagnosis_date=delivery_date,
-            treatment_start_date=delivery_date,
-            treatment_regimen=conversion_data.treatment_regimen,
-            notes=conversion_data.notes,
+        await self.db.execute(
+            _text("""
+                UPDATE patients
+                SET patient_type  = 'REGULAR',
+                    status        = 'POSTPARTUM',
+                    updated_by_id = :user_id
+                WHERE id = :patient_id
+            """),
+            {"user_id": str(user_id), "patient_id": str(patient_id)},
         )
 
-        # Add only the RegularPatient subtype row — the base patients row already
-        # exists and will be updated via the flush.
-        self.db.add(pregnant_patient)
-        self.db.add(regular_patient)
+        await self.db.execute(
+            _text("""
+                INSERT INTO regular_patients
+                    (id, diagnosis_date, treatment_start_date, treatment_regimen, notes)
+                VALUES
+                    (:id, :diagnosis_date, :treatment_start_date, :treatment_regimen, :notes)
+                ON CONFLICT (id) DO NOTHING
+            """),
+            {
+                "id":                   str(patient_id),
+                "diagnosis_date":       delivery_date,
+                "treatment_start_date": delivery_date,
+                "treatment_regimen":    conversion_data.treatment_regimen,
+                "notes":                conversion_data.notes,
+            },
+        )
+
         await self.db.commit()
-        await self.db.refresh(regular_patient)
+
+        # Expire the identity map so the next SELECT sees the updated discriminator.
+        # Without this, SQLAlchemy's cache still holds the PregnantPatient object
+        # for this PK and the RegularPatient query returns None.
+        self.db.expire_all()
+
+        # Reload with a clean SELECT with all eager loads the response schema needs.
+        # RegularPatient relationships are lazy="noload" — selectinload is required
+        # or from_patient() will trigger implicit lazy loads → MissingGreenlet error.
+        from sqlalchemy.orm import selectinload as _sil
+        result = await self.db.execute(
+            _select(RegularPatient)
+            .where(RegularPatient.id == patient_id)
+            .options(
+                _sil(RegularPatient.facility),
+                _sil(RegularPatient.created_by),
+                _sil(RegularPatient.updated_by),
+            )
+        )
+        regular_patient = result.scalars().first()
+        if not regular_patient:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Conversion succeeded but patient could not be reloaded.",
+            )
         return regular_patient
 
     # =========================================================================
@@ -408,7 +466,22 @@ class PatientService:
 
         # Persist the updated gravida count and the new Pregnancy row.
         await self.repo.update_pregnant_patient(patient_id, patient)
-        return await self.repo.create_pregnancy(pregnancy)
+        created_pregnancy = await self.repo.create_pregnancy(pregnancy)
+
+        # Generate delivery reminders if EDD was provided when opening the episode
+        if created_pregnancy.expected_delivery_date:
+            patient_record = await self.repo.get_pregnant_patient_by_id(patient_id)
+            patient_name = patient_record.name if patient_record else "Dear patient"
+            rows = build_reminder_rows(
+                patient_id=patient_id,
+                due_date=created_pregnancy.expected_delivery_date,
+                reminder_type=ReminderType.DELIVERY_WEEK,
+                patient_name=patient_name,
+            )
+            if rows:
+                await self.repo.bulk_create_reminders(rows)
+
+        return created_pregnancy
 
     async def get_pregnancy(self, pregnancy_id: uuid.UUID) -> Pregnancy:
         """Get a pregnancy episode by ID."""
@@ -450,10 +523,42 @@ class PatientService:
                 detail="Cannot update a closed pregnancy episode.",
             )
 
-        for field, value in update_data.model_dump(exclude_unset=True).items():
+        update_dict = update_data.model_dump(exclude_unset=True)
+
+        # Track whether EDD is actually changing before applying updates
+        edd_changed = (
+            "expected_delivery_date" in update_dict
+            and update_dict["expected_delivery_date"] != pregnancy.expected_delivery_date
+        )
+
+        for field, value in update_dict.items():
             setattr(pregnancy, field, value)
 
-        return await self.repo.update_pregnancy(pregnancy)
+        updated = await self.repo.update_pregnancy(pregnancy)
+
+        # Regenerate delivery reminders when EDD is set or changed
+        if edd_changed and updated.expected_delivery_date:
+            patient = await self.repo.get_pregnant_patient_by_id(updated.patient_id)
+            patient_name = patient.name if patient else "Dear patient"
+
+            # Cancel all pending delivery reminders for this patient first
+            await cancel_pending_reminders(
+                db=self.repo.db,
+                patient_id=updated.patient_id,
+                reminder_type=ReminderType.DELIVERY_WEEK,
+            )
+
+            # Build and persist the fresh escalating reminder set
+            rows = build_reminder_rows(
+                patient_id=updated.patient_id,
+                due_date=updated.expected_delivery_date,
+                reminder_type=ReminderType.DELIVERY_WEEK,
+                patient_name=patient_name,
+            )
+            if rows:
+                await self.repo.bulk_create_reminders(rows)
+
+        return updated
 
     async def close_pregnancy(
         self,
@@ -526,6 +631,23 @@ class PatientService:
         self.db.add(child)
         await self.db.flush()  # flush to get the child ID for logging
         await self.db.refresh(child, ["pregnancy"])
+
+        # Generate 6-month checkup reminders immediately — the date is always
+        # set at creation, so no need to wait for an update.
+        if child.six_month_checkup_date and child.pregnancy:
+            patient = await self.repo.get_pregnant_patient_by_id(child.pregnancy.patient_id)
+            patient_name = patient.name if patient else "Dear patient"
+
+            rows = build_reminder_rows(
+                patient_id=child.pregnancy.patient_id,
+                due_date=child.six_month_checkup_date,
+                reminder_type=ReminderType.CHILD_6MONTH_CHECKUP,
+                patient_name=patient_name,
+                child_id=child.id,
+            )
+            if rows:
+                await self.repo.bulk_create_reminders(rows)
+
         return child
 
     async def get_child(self, child_id: uuid.UUID) -> Child:
@@ -556,9 +678,47 @@ class PatientService:
         # in the schema body — always prefer the injected auth-context value.
         if updated_by_id is not None:
             update_dict["updated_by_id"] = updated_by_id
+
+        # Detect if six_month_checkup_date is being set or changed
+        checkup_changed = (
+            "six_month_checkup_date" in update_dict
+            and update_dict["six_month_checkup_date"] != child.six_month_checkup_date
+        )
+
         for field, value in update_dict.items():
             setattr(child, field, value)
-        return await self.repo.update_child(child)
+
+        updated_child = await self.repo.update_child(child)
+
+        # Regenerate checkup reminders when the date changes and checkup isn't done yet
+        if checkup_changed and updated_child.six_month_checkup_date and not updated_child.six_month_checkup_completed:
+            pregnancy = await self.repo.get_pregnancy_by_id(updated_child.pregnancy_id)
+            patient_name = "Dear patient"
+            if pregnancy:
+                patient = await self.repo.get_pregnant_patient_by_id(pregnancy.patient_id)
+                if patient:
+                    patient_name = patient.name
+
+            # Cancel existing pending checkup reminders for this specific child
+            await cancel_pending_reminders(
+                db=self.repo.db,
+                patient_id=pregnancy.patient_id if pregnancy else updated_child.pregnancy_id,
+                reminder_type=ReminderType.CHILD_6MONTH_CHECKUP,
+                child_id=updated_child.id,
+            )
+
+            # Build and persist the fresh escalating reminder set
+            rows = build_reminder_rows(
+                patient_id=pregnancy.patient_id if pregnancy else updated_child.pregnancy_id,
+                due_date=updated_child.six_month_checkup_date,
+                reminder_type=ReminderType.CHILD_6MONTH_CHECKUP,
+                patient_name=patient_name,
+                child_id=updated_child.id,
+            )
+            if rows:
+                await self.repo.bulk_create_reminders(rows)
+
+        return updated_child
 
     async def list_pregnancy_children(
         self, pregnancy_id: uuid.UUID
@@ -752,3 +912,182 @@ class PatientService:
                 status_code=status.HTTP_404_NOT_FOUND, detail="Patient not found."
             )
         return await self.repo.get_patient_reminders(patient_id, pending_only)
+
+    # =========================================================================
+    # Diagnosis
+    # =========================================================================
+
+    async def create_diagnosis(
+                self, diagnosis_data: DiagnosisCreateSchema
+        ) -> Diagnosis:
+        if diagnosis_data.patient_id is None:
+            raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Patient ID is required to create a diagnosis.",
+                )
+        patient = await self.repo.get_patient_by_id(diagnosis_data.patient_id)
+        if not patient:
+            raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND, detail="Patient not found."
+                )
+        diagnosis_dict = diagnosis_data.model_dump()
+        return await self.repo.create_diagnosis(Diagnosis(**diagnosis_dict))
+
+    async def get_diagnosis(self, diagnosis_id: uuid.UUID) -> Diagnosis:
+        diagnosis = await self.repo.get_diagnosis_by_id(diagnosis_id)
+        if not diagnosis:
+            raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND, detail="Diagnosis not found."
+                )
+        return diagnosis
+
+    async def update_diagnosis(
+                self, diagnosis_id: uuid.UUID, update_data: DiagnosisUpdateSchema
+        ) -> Diagnosis:
+        diagnosis = await self.repo.get_diagnosis_by_id(diagnosis_id)
+        if not diagnosis:
+            raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND, detail="Diagnosis not found."
+                )
+        for field, value in update_data.model_dump(exclude_unset=True).items():
+            setattr(diagnosis, field, value)
+        return await self.repo.update_diagnosis(diagnosis)
+
+    async def delete_diagnosis(self, diagnosis_id: uuid.UUID) -> None:
+        diagnosis = await self.repo.get_diagnosis_by_id(diagnosis_id)
+        if not diagnosis:
+            raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND, detail="Diagnosis not found."
+                )
+        diagnosis.is_deleted = True
+        from datetime import datetime, timezone
+        diagnosis.deleted_at = datetime.now(timezone.utc)
+        await self.repo.update_diagnosis(diagnosis)
+
+    async def list_patient_diagnoses(
+                self, patient_id: uuid.UUID
+        ) -> list[Diagnosis]:
+        patient = await self.repo.get_patient_by_id(patient_id)
+        if not patient:
+            raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND, detail="Patient not found."
+                )
+        return await self.repo.get_patient_diagnoses(patient_id)
+
+    # =========================================================================
+    # Re-register as pregnant
+    # =========================================================================
+
+    async def re_register_as_pregnant(
+        self,
+        user_id: uuid.UUID,
+        patient_id: uuid.UUID,
+        pregnancy_data: "ReRegisterAsPregnantSchema",
+    ) -> PregnantPatient:
+        """
+        Re-register a regular patient as pregnant (second or later pregnancy).
+
+        The pregnant_patients row is never deleted on conversion — it stays for
+        history. So re-registration only needs to:
+          1. UPDATE the discriminator back to PREGNANT.
+          2. Load the existing PregnantPatient ORM object.
+          3. Call open_new_pregnancy() — increments gravida, creates new episode.
+          4. Apply any clinical data from the request.
+          5. Commit. No INSERT into pregnant_patients needed.
+        """
+        from sqlalchemy import text as _text, select as _select
+
+        # Expire the identity map before ANY ORM query so this request always
+        # reads the current discriminator from the DB, not a cached mapper from
+        # a prior request in the same worker process.
+        self.db.expire_all()
+
+        regular = await self.repo.get_regular_patient_by_id(patient_id)
+        if not regular:
+            base = await self.repo.get_patient_by_id(patient_id)
+            if base:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Patient is already registered as pregnant.",
+                )
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Regular patient not found.",
+            )
+
+        # Flip discriminator back to PREGNANT.
+        await self.db.execute(
+            _text("""
+                UPDATE patients
+                SET patient_type  = 'PREGNANT',
+                    status        = 'ACTIVE',
+                    updated_by_id = :user_id
+                WHERE id = :patient_id
+            """),
+            {"user_id": str(user_id), "patient_id": str(patient_id)},
+        )
+        await self.db.commit()
+
+        # Expire the session so the next SELECT sees the new discriminator.
+        self.db.expire_all()
+
+        # Load the existing PregnantPatient row with all relationships the response
+        # schema needs (facility, created_by, updated_by, pregnancies).
+        # All relationships are lazy="noload" — they MUST be selectinload'd here.
+        from sqlalchemy.orm import selectinload as _sil
+        result = await self.db.execute(
+            _select(PregnantPatient)
+            .where(PregnantPatient.id == patient_id)
+            .options(
+                _sil(PregnantPatient.facility),
+                _sil(PregnantPatient.created_by),
+                _sil(PregnantPatient.updated_by),
+                _sil(PregnantPatient.pregnancies),
+            )
+        )
+        pregnant_patient = result.scalars().first()
+        if not pregnant_patient:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Re-registration failed: pregnant_patients row missing.",
+            )
+
+        # Open the new episode via the model's business logic.
+        try:
+            pregnancy = pregnant_patient.open_new_pregnancy()
+        except ValueError as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)
+            )
+
+        # Apply optional clinical data.
+        if pregnancy_data.lmp_date:
+            pregnancy.lmp_date = pregnancy_data.lmp_date
+        if pregnancy_data.expected_delivery_date:
+            pregnancy.expected_delivery_date = pregnancy_data.expected_delivery_date
+        if pregnancy_data.gestational_age_weeks is not None:
+            pregnancy.gestational_age_weeks = pregnancy_data.gestational_age_weeks
+        if pregnancy_data.risk_factors:
+            pregnancy.risk_factors = pregnancy_data.risk_factors
+        if pregnancy_data.notes:
+            pregnancy.notes = pregnancy_data.notes
+
+        pregnant_patient.updated_by_id = user_id
+        self.db.add(pregnant_patient)
+        await self.db.commit()
+
+        # After commit, do a final SELECT with all eager loads so the response
+        # schema can access facility/created_by/updated_by/pregnancies without
+        # triggering implicit lazy loads on an async session (MissingGreenlet).
+        self.db.expire_all()
+        final = await self.db.execute(
+            _select(PregnantPatient)
+            .where(PregnantPatient.id == patient_id)
+            .options(
+                _sil(PregnantPatient.facility),
+                _sil(PregnantPatient.created_by),
+                _sil(PregnantPatient.updated_by),
+                _sil(PregnantPatient.pregnancies),
+            )
+        )
+        return final.scalars().first()

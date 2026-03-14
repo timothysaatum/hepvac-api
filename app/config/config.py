@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     PRODUCTION_DB_URL: str
     SECRET_KEY: str
     ALEMBIC_DB_URL: str
+    DEVICE_FINGERPRINT_SECRET: str
 
     # jwt user session management
     ACCESS_TOKEN_EXPIRE_MINUTES: int
@@ -39,12 +40,17 @@ class Settings(BaseSettings):
     FROM_NAME: str
 
     # sms
-    AFRICAISTALKING: str | None = None
-    AFRICAISTALKING_AUTH_TOKEN: str | None = None
-    AFRICAISTALKING_PHONE_NUMBER: str | None = None
-    TERMII_API_KEY: str | None = None
-    TERMII_SENDER_ID: str | None = None
-    SMS_PROVIDER: str
+    SMS_PROVIDER: str = "arkesel"
+
+    # arkesel sms
+    ARKESEL_API_KEY: str | None = None   # Required in production
+    ARKESEL_BASE_URL: str = "https://sms.arkesel.com/sms/api"
+    ARKESEL_SENDER_ID: str = "HepVac"
+
+    # reminder settings
+    REMINDER_SCAN_INTERVAL: int = 300        # seconds between reminder scans (default 5 min)
+    REMINDER_ADVANCE_DAYS: int = 1           # days ahead to scan for due reminders
+    REMINDER_MAX_RETRIES: int = 3
 
     # redis / caching
     REDIS_URL: str

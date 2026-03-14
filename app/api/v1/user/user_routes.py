@@ -115,6 +115,7 @@ async def login_user(
         HTTPException: If authentication fails or device is not trusted
     """
     user_service = UserService(db)
+    print(request.headers)
     device_data = SessionManager.extract_device_info(request)
     user_agent = device_data["user_agent"]
     ip_address = device_data["client_ip"]
@@ -382,8 +383,10 @@ async def refresh_token(
             )
 
         # Get user with relationships
+        user_id = refresh_token_record.user_id
         result = await db.execute(
             select(User)
+            .where(User.id == user_id)
             .options(
                 selectinload(User.roles).selectinload(Role.permissions),
                 selectinload(User.facility),
@@ -587,6 +590,7 @@ async def logout(
             httponly=True,
             secure=True,
             samesite="none",
+            path="/",
         )
 
         logger.log_security_event(

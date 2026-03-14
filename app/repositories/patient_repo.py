@@ -2,9 +2,8 @@
 Patient repository — data access layer.
 """
 
-from ast import stmt
 from datetime import datetime, timezone
-from typing import Optional, List
+from typing import Optional, List, Sequence
 import uuid
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -18,6 +17,7 @@ from app.models.patient_model import (
     Pregnancy,
     RegularPatient,
     Child,
+    Diagnosis,
     Prescription,
     MedicationSchedule,
     PatientReminder,
@@ -152,14 +152,30 @@ class PatientRepository:
     async def get_pregnant_patient_by_id(
         self, patient_id: uuid.UUID
     ) -> Optional[PregnantPatient]:
-        """Get pregnant patient by ID."""
-        result = await self.db.execute(
-            select(PregnantPatient).where(
-                PregnantPatient.id == patient_id,
-                PregnantPatient.is_deleted == False,
+        """Get pregnant patient by ID with all relationships eagerly loaded.
+
+        Returns None (rather than raising) when the patient exists but the
+        discriminator no longer matches PregnantPatient — i.e. was converted
+        to REGULAR.  The caller (service layer) decides how to handle it.
+        """
+        from sqlalchemy.exc import InvalidRequestError
+        try:
+            result = await self.db.execute(
+                select(PregnantPatient)
+                .where(
+                    PregnantPatient.id == patient_id,
+                    PregnantPatient.is_deleted == False,
+                )
+                .options(
+                    selectinload(PregnantPatient.facility),
+                    selectinload(PregnantPatient.created_by),
+                    selectinload(PregnantPatient.updated_by),
+                )
             )
-        )
-        return result.scalars().first()
+            return result.scalars().first()
+        except InvalidRequestError:
+            # Discriminator mismatch — patient was converted to REGULAR.
+            return None
 
     async def update_pregnant_patient(
         self, updated_by_id: uuid.UUID, patient: PregnantPatient
@@ -185,14 +201,35 @@ class PatientRepository:
     async def get_regular_patient_by_id(
         self, patient_id: uuid.UUID
     ) -> Optional[RegularPatient]:
-        """Get regular patient by ID."""
-        result = await self.db.execute(
-            select(RegularPatient).where(
-                RegularPatient.id == patient_id,
-                RegularPatient.is_deleted == False,
+        """Get regular patient by ID with all relationships eagerly loaded.
+
+        Returns None (rather than raising) when the patient exists but the
+        discriminator no longer matches RegularPatient — i.e. was re-registered
+        as pregnant.  The caller (service layer) decides how to handle it.
+
+        This mirrors the same guard on get_pregnant_patient_by_id: SQLAlchemy's
+        identity map may cache the row under a different polymorphic mapper from
+        a prior request in the same worker, causing InvalidRequestError when the
+        discriminator has changed since the cache was populated.
+        """
+        from sqlalchemy.exc import InvalidRequestError
+        try:
+            result = await self.db.execute(
+                select(RegularPatient)
+                .where(
+                    RegularPatient.id == patient_id,
+                    RegularPatient.is_deleted == False,
+                )
+                .options(
+                    selectinload(RegularPatient.facility),
+                    selectinload(RegularPatient.created_by),
+                    selectinload(RegularPatient.updated_by),
+                )
             )
-        )
-        return result.scalars().first()
+            return result.scalars().first()
+        except InvalidRequestError:
+            # Discriminator mismatch — patient was re-registered as PREGNANT.
+            return None
 
     async def update_regular_patient(
         self, updated_by_id: uuid.UUID, patient: RegularPatient
@@ -410,6 +447,22 @@ class PatientRepository:
         await self.db.refresh(reminder)
         return reminder
 
+    async def bulk_create_reminders(
+        self,
+        reminders: Sequence[PatientReminder],
+    ) -> List[PatientReminder]:
+        """
+        Persist multiple PatientReminder rows in a single commit.
+        Used by the escalating reminder generator — more efficient than
+        calling create_reminder() in a loop (one round-trip vs N).
+        """
+        for r in reminders:
+            self.db.add(r)
+        await self.db.commit()
+        for r in reminders:
+            await self.db.refresh(r)
+        return list(reminders)
+
     async def get_reminder_by_id(
         self, reminder_id: uuid.UUID
     ) -> Optional[PatientReminder]:
@@ -439,3 +492,45 @@ class PatientRepository:
     async def delete_reminder(self, reminder: PatientReminder) -> None:
         await self.db.delete(reminder)
         await self.db.commit()
+
+    # =========================================================================
+    # Diagnosis
+    # =========================================================================
+
+    async def create_diagnosis(self, diagnosis: Diagnosis) -> Diagnosis:
+        """Persist a new Diagnosis record."""
+        self.db.add(diagnosis)
+        await self.db.commit()
+        await self.db.refresh(diagnosis)
+        return diagnosis
+
+    async def get_diagnosis_by_id(self, diagnosis_id: uuid.UUID) -> Optional[Diagnosis]:
+        """Get a Diagnosis by ID."""
+        result = await self.db.execute(
+            select(Diagnosis).where(
+                Diagnosis.id == diagnosis_id,
+                Diagnosis.is_deleted == False,
+            )
+        )
+        return result.scalars().first()
+
+    async def update_diagnosis(self, diagnosis: Diagnosis) -> Diagnosis:
+        """Persist updates to a Diagnosis."""
+        self.db.add(diagnosis)
+        await self.db.commit()
+        await self.db.refresh(diagnosis)
+        return diagnosis
+
+    async def get_patient_diagnoses(
+        self, patient_id: uuid.UUID
+    ) -> list[Diagnosis]:
+        """List all active diagnoses for a patient, newest first."""
+        result = await self.db.execute(
+            select(Diagnosis)
+            .where(
+                Diagnosis.patient_id == patient_id,
+                Diagnosis.is_deleted == False,
+            )
+            .order_by(Diagnosis.diagnosed_on.desc())
+        )
+        return list(result.scalars().all())

@@ -56,3 +56,4 @@ from .patient_model import (
 from app.core.settings import Setting
 from app.core.notification_log import NotificationLog
 from app.middlewares.device_trust import TrustedDevice, LoginAttempt, GeographicRestriction
+from .job_queue_model import JobQueue

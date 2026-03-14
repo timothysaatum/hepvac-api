@@ -171,17 +171,19 @@ def set_refresh_token_cookie(
         key:           Cookie name override (default: "refresh_token")
         request:       FastAPI request object (unused — kept for API compat)
     """
-    # FIX: was setting secure=True only when the current request was HTTPS.
-    # In a production deployment behind a TLS-terminating proxy the inner
-    # request is HTTP — this would set secure=False in production, making
-    # the cookie transmittable over plain HTTP.
-    # Always use the environment flag as the authoritative signal.
+    # secure=True is required when samesite="none" (browsers enforce this).
+    # In production this is always HTTPS so secure=True is correct.
+    # In local development the app runs on http://localhost — browsers refuse
+    # to set secure cookies over plain HTTP, breaking the refresh token flow.
+    # Use IS_PRODUCTION so local dev works without needing a self-signed cert.
     is_secure = IS_PRODUCTION
 
-    # FIX: was hardcoding samesite="lax" in both branches of the ternary —
-    # the ternary was effectively a no-op.  Use "strict" in production to
-    # defend against CSRF; "lax" in development for Swagger/Postman compat.
-    samesite = "strict" if IS_PRODUCTION else "lax"
+    # samesite="none" is required for cross-origin requests (SPA on a different
+    # port/domain than the API). In local dev with a Vite proxy this isn't
+    # needed, but "lax" breaks the refresh token POST from a different origin.
+    # Keep "none" in production; use "lax" locally so the cookie is accepted
+    # over HTTP (browsers reject samesite=none on non-secure cookies).
+    samesite = "none" if IS_PRODUCTION else "lax"
 
     # FIX: was hardcoding 30 * 24 * 60 * 60. Derive from the setting constant
     # so token lifetime and cookie lifetime stay in sync.

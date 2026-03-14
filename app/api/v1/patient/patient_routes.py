@@ -22,6 +22,8 @@ from app.core.utils import logger
 from app.models.user_model import User
 from app.schemas.patient_schemas import (
     ConvertToRegularPatientSchema,
+    ReRegisterAsPregnantSchema,
+    PatientType,
     PregnancyCloseSchema,
     PregnancyCreateSchema,
     PregnancyResponseSchema,
@@ -193,15 +195,16 @@ async def convert_to_regular_patient(
     the patient into the long-term HIV treatment pathway.
     """
     service = PatientService(db)
+    user_id = current_user.id
     try:
         patient = await service.convert_to_regular_patient(
-            current_user.id, patient_id, conversion_data
+            user_id, patient_id, conversion_data
         )
 
         logger.log_info({
             "event": "patient_converted_to_regular",
             "patient_id": str(patient_id),
-            "converted_by": str(current_user.id),
+            "converted_by": str(user_id),
         })
 
         return RegularPatientResponseSchema.from_patient(patient)
@@ -214,7 +217,7 @@ async def convert_to_regular_patient(
             "event": "patient_conversion_error",
             "patient_id": str(patient_id),
             "error": str(e),
-            "user_id": str(current_user.id),
+            "user_id": str(user_id),
         }, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -581,7 +584,7 @@ async def list_patients(
 
         validated_items = []
         for patient in patients:
-            if patient.patient_type == "pregnant":
+            if patient.patient_type == PatientType.PREGNANT:
                 validated_items.append(
                     PregnantPatientResponseSchema.from_patient(patient)
                 )
@@ -632,6 +635,60 @@ async def list_patients(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An error occurred while retrieving patients.",
+        )
+
+
+
+# =============================================================================
+# Re-register as pregnant
+# =============================================================================
+
+@router.post(
+    "/regular/{patient_id}/re-register-pregnant",
+    response_model=PregnantPatientResponseSchema,
+    status_code=status.HTTP_200_OK,
+)
+async def re_register_as_pregnant(
+    patient_id: uuid.UUID,
+    pregnancy_data: ReRegisterAsPregnantSchema,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_staff_or_admin()),
+):
+    """
+    Re-register a regular patient as pregnant (second or later pregnancy).
+
+    Flips the patient_type discriminator back to PREGNANT, then opens a new
+    Pregnancy episode on the existing pregnant_patients row.  All historical
+    data (previous pregnancies, children, vaccines, prescriptions) stays intact.
+    """
+    service = PatientService(db)
+    user_id = current_user.id
+    try:
+        patient = await service.re_register_as_pregnant(
+            user_id, patient_id, pregnancy_data
+        )
+
+        logger.log_info({
+            "event": "patient_re_registered_as_pregnant",
+            "patient_id": str(patient_id),
+            "re_registered_by": str(user_id),
+        })
+
+        return PregnantPatientResponseSchema.from_patient(patient)
+
+    except HTTPException:
+        raise
+
+    except Exception as e:
+        logger.log_error({
+            "event": "re_register_pregnant_error",
+            "patient_id": str(patient_id),
+            "error": str(e),
+            "user_id": str(user_id),
+        }, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An error occurred while re-registering the patient.",
         )
 
 

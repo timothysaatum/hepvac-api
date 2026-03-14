@@ -201,7 +201,7 @@ class UserService:
 
     async def get_user_by_id(self, user_id: uuid.UUID) -> User:
 
-        user = await self.repo.get_user_by_id(str(user_id))
+        user = await self.repo.get_user_by_id(user_id)
         if not user:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -211,7 +211,7 @@ class UserService:
         return user
     
     async def delete_user(self, user_id: uuid.UUID) -> bool:
-        user = await self.repo.get_user_by_id(str(user_id))
+        user = await self.repo.get_user_by_id(user_id)
 
         if not user:
             raise HTTPException(

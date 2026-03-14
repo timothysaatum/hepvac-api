@@ -797,6 +797,26 @@ class ConvertToRegularPatientSchema(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class ReRegisterAsPregnantSchema(BaseModel):
+    """
+    Re-register a regular patient as pregnant.
+
+    Used when a patient who previously delivered and was converted to REGULAR
+    becomes pregnant again. The pregnant_patients row already exists from the
+    first pregnancy — this just flips the discriminator back and opens a new
+    Pregnancy episode.
+
+    All fields optional — clinical data can be added later via PATCH /pregnancies/{id}.
+    """
+    lmp_date:               Optional[date] = None
+    expected_delivery_date: Optional[date] = None
+    gestational_age_weeks:  Optional[int]  = None
+    risk_factors:           Optional[str]  = None
+    notes:                  Optional[str]  = None
+
+    model_config = {"from_attributes": True}
+
+
 # ============================================================================
 # Diagnosis
 # ============================================================================

@@ -1,8 +1,8 @@
-"""create initial tables
+"""add  tables
 
-Revision ID: e0042e45a842
+Revision ID: 51464e6dcadd
 Revises: 
-Create Date: 2026-03-05 10:07:23.908507
+Create Date: 2026-03-10 03:08:37.547313
 
 """
 from typing import Sequence, Union
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
-revision: str = 'e0042e45a842'
+revision: str = '51464e6dcadd'
 down_revision: Union[str, Sequence[str], None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -28,8 +28,8 @@ def upgrade() -> None:
     sa.Column('email', sa.String(length=255), nullable=True),
     sa.Column('address', sa.String(length=255), nullable=True),
     sa.Column('facility_manager_id', sa.UUID(), nullable=True),
-    sa.Column('created_at', sa.TIMESTAMP(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
-    sa.Column('updated_at', sa.TIMESTAMP(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
+    sa.Column('created_at', sa.TIMESTAMP(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.Column('updated_at', sa.TIMESTAMP(timezone=True), server_default=sa.text('now()'), nullable=False),
     sa.ForeignKeyConstraint(['facility_manager_id'], ['users.id'], name='fk_facility_manager_id', ondelete='SET NULL', use_alter=True),
     sa.PrimaryKeyConstraint('id')
     )
@@ -41,11 +41,35 @@ def upgrade() -> None:
         batch_op.create_index(batch_op.f('ix_facilities_facility_name'), ['facility_name'], unique=True)
         batch_op.create_index(batch_op.f('ix_facilities_id'), ['id'], unique=False)
 
+    op.create_table('job_queue',
+    sa.Column('id', sa.Integer(), nullable=False),
+    sa.Column('job_type', sa.Enum('SCAN_DUE_REMINDERS', 'SEND_REMINDER_SMS', 'SEND_REMINDER_EMAIL', name='jobtype'), nullable=False),
+    sa.Column('status', sa.Enum('PENDING', 'RUNNING', 'COMPLETED', 'FAILED', name='jobstatus'), nullable=False),
+    sa.Column('payload', sa.JSON(), nullable=False),
+    sa.Column('scheduled_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.Column('locked_until', sa.DateTime(timezone=True), nullable=True),
+    sa.Column('started_at', sa.DateTime(timezone=True), nullable=True),
+    sa.Column('completed_at', sa.DateTime(timezone=True), nullable=True),
+    sa.Column('retry_count', sa.Integer(), nullable=False),
+    sa.Column('max_retries', sa.Integer(), nullable=False),
+    sa.Column('result', sa.JSON(), nullable=True),
+    sa.Column('error_message', sa.Text(), nullable=True),
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.PrimaryKeyConstraint('id')
+    )
+    with op.batch_alter_table('job_queue', schema=None) as batch_op:
+        batch_op.create_index('idx_jobqueue_status_scheduled', ['status', 'scheduled_at'], unique=False)
+        batch_op.create_index('idx_jobqueue_type_status', ['job_type', 'status'], unique=False)
+        batch_op.create_index(batch_op.f('ix_job_queue_id'), ['id'], unique=False)
+        batch_op.create_index(batch_op.f('ix_job_queue_job_type'), ['job_type'], unique=False)
+        batch_op.create_index(batch_op.f('ix_job_queue_status'), ['status'], unique=False)
+
     op.create_table('permissions',
     sa.Column('id', sa.Integer(), autoincrement=True, nullable=False),
     sa.Column('name', sa.String(length=96), nullable=False),
     sa.Column('description', sa.String(length=255), nullable=True),
-    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
     sa.PrimaryKeyConstraint('id')
     )
     with op.batch_alter_table('permissions', schema=None) as batch_op:
@@ -55,7 +79,7 @@ def upgrade() -> None:
     sa.Column('id', sa.Integer(), autoincrement=True, nullable=False),
     sa.Column('name', sa.String(length=64), nullable=False),
     sa.Column('description', sa.String(length=255), nullable=True),
-    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
     sa.PrimaryKeyConstraint('id')
     )
     with op.batch_alter_table('roles', schema=None) as batch_op:
@@ -73,8 +97,8 @@ def upgrade() -> None:
     sa.Column('is_deleted', sa.Boolean(), nullable=False),
     sa.Column('deleted_at', sa.TIMESTAMP(timezone=True), nullable=True),
     sa.Column('login_attempts', sa.Integer(), nullable=False),
-    sa.Column('created_at', sa.TIMESTAMP(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
-    sa.Column('updated_at', sa.TIMESTAMP(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
+    sa.Column('created_at', sa.TIMESTAMP(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.Column('updated_at', sa.TIMESTAMP(timezone=True), server_default=sa.text('now()'), nullable=False),
     sa.Column('last_login_at', sa.TIMESTAMP(timezone=True), nullable=True),
     sa.Column('facility_id', sa.UUID(), nullable=True),
     sa.ForeignKeyConstraint(['facility_id'], ['facilities.id'], name='fk_user_facility_id', ondelete='SET NULL', use_alter=True),
@@ -91,7 +115,7 @@ def upgrade() -> None:
     sa.Column('allowed_countries', sa.Text(), nullable=False, comment='JSON array of ISO country codes e.g. ["GH", "NG", "KE"]'),
     sa.Column('blocked_countries', sa.Text(), nullable=True, comment='JSON array of ISO country codes to block'),
     sa.Column('is_active', sa.Boolean(), nullable=False),
-    sa.Column('created_at', sa.TIMESTAMP(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
+    sa.Column('created_at', sa.TIMESTAMP(timezone=True), server_default=sa.text('now()'), nullable=False),
     sa.ForeignKeyConstraint(['facility_id'], ['facilities.id'], ondelete='CASCADE'),
     sa.PrimaryKeyConstraint('id')
     )
@@ -109,7 +133,7 @@ def upgrade() -> None:
     sa.Column('country', sa.String(length=100), nullable=True),
     sa.Column('city', sa.String(length=100), nullable=True),
     sa.Column('user_agent', sa.Text(), nullable=True),
-    sa.Column('attempted_at', sa.TIMESTAMP(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
+    sa.Column('attempted_at', sa.TIMESTAMP(timezone=True), server_default=sa.text('now()'), nullable=False),
     sa.ForeignKeyConstraint(['user_id'], ['users.id'], ondelete='SET NULL'),
     sa.PrimaryKeyConstraint('id')
     )
@@ -171,14 +195,14 @@ def upgrade() -> None:
     sa.Column('status', postgresql.ENUM('ACTIVE', 'POSTPARTUM', 'COMPLETED', 'INACTIVE', name='patientstatus'), nullable=False),
     sa.Column('facility_id', sa.UUID(), nullable=False),
     sa.Column('created_by_id', sa.UUID(), nullable=True),
-    sa.Column('created_at', sa.TIMESTAMP(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
+    sa.Column('created_at', sa.TIMESTAMP(timezone=True), server_default=sa.text('now()'), nullable=False),
     sa.Column('updated_by_id', sa.UUID(), nullable=True),
-    sa.Column('updated_at', sa.TIMESTAMP(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
+    sa.Column('updated_at', sa.TIMESTAMP(timezone=True), server_default=sa.text('now()'), nullable=False),
     sa.Column('is_deleted', sa.Boolean(), nullable=False),
     sa.Column('deleted_at', sa.TIMESTAMP(timezone=True), nullable=True),
     sa.Column('accepts_messaging', sa.Boolean(), nullable=False),
     sa.ForeignKeyConstraint(['created_by_id'], ['users.id'], ondelete='SET NULL'),
-    sa.ForeignKeyConstraint(['facility_id'], ['facilities.id'], ondelete='CASCADE'),
+    sa.ForeignKeyConstraint(['facility_id'], ['facilities.id'], ondelete='RESTRICT'),
     sa.ForeignKeyConstraint(['updated_by_id'], ['users.id'], ondelete='SET NULL'),
     sa.PrimaryKeyConstraint('id')
     )
@@ -200,8 +224,8 @@ def upgrade() -> None:
     sa.Column('token', sa.String(length=512), nullable=False),
     sa.Column('device_info', sa.String(length=255), nullable=True),
     sa.Column('ip_address', sa.String(length=45), nullable=True),
-    sa.Column('created_at', sa.TIMESTAMP(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
-    sa.Column('updated_at', sa.TIMESTAMP(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
+    sa.Column('created_at', sa.TIMESTAMP(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.Column('updated_at', sa.TIMESTAMP(timezone=True), server_default=sa.text('now()'), nullable=False),
     sa.Column('expires_at', sa.TIMESTAMP(timezone=True), nullable=False),
     sa.Column('absolute_expiry', sa.TIMESTAMP(timezone=True), nullable=False),
     sa.Column('is_revoked', sa.Boolean(), nullable=False),
@@ -218,7 +242,7 @@ def upgrade() -> None:
     op.create_table('role_permissions',
     sa.Column('role_id', sa.Integer(), nullable=False),
     sa.Column('permission_id', sa.Integer(), nullable=False),
-    sa.Column('assigned_at', sa.DateTime(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
+    sa.Column('assigned_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
     sa.ForeignKeyConstraint(['permission_id'], ['permissions.id'], ondelete='CASCADE'),
     sa.ForeignKeyConstraint(['role_id'], ['roles.id'], ondelete='CASCADE'),
     sa.PrimaryKeyConstraint('role_id', 'permission_id')
@@ -267,8 +291,8 @@ def upgrade() -> None:
     sa.Column('device_type', sa.String(length=50), nullable=True),
     sa.Column('last_ip_address', sa.String(length=45), nullable=True),
     sa.Column('status', sa.Enum('PENDING', 'TRUSTED', 'BLOCKED', 'SUSPICIOUS', name='devicestatus'), nullable=False),
-    sa.Column('first_seen', sa.TIMESTAMP(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
-    sa.Column('last_seen', sa.TIMESTAMP(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
+    sa.Column('first_seen', sa.TIMESTAMP(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.Column('last_seen', sa.TIMESTAMP(timezone=True), server_default=sa.text('now()'), nullable=False),
     sa.Column('approved_by_id', sa.UUID(), nullable=True),
     sa.Column('approved_at', sa.TIMESTAMP(timezone=True), nullable=True),
     sa.Column('expires_at', sa.TIMESTAMP(timezone=True), nullable=True),
@@ -286,7 +310,7 @@ def upgrade() -> None:
     op.create_table('user_roles',
     sa.Column('user_id', sa.UUID(), nullable=False),
     sa.Column('role_id', sa.Integer(), nullable=False),
-    sa.Column('assigned_at', sa.DateTime(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
+    sa.Column('assigned_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
     sa.ForeignKeyConstraint(['role_id'], ['roles.id'], ondelete='CASCADE'),
     sa.ForeignKeyConstraint(['user_id'], ['users.id'], ondelete='CASCADE'),
     sa.PrimaryKeyConstraint('user_id', 'role_id')
@@ -300,7 +324,7 @@ def upgrade() -> None:
     sa.Column('session_token', sa.String(length=512), nullable=False),
     sa.Column('device_fingerprint', sa.String(length=255), nullable=True),
     sa.Column('login_method', sa.String(length=50), nullable=True),
-    sa.Column('created_at', sa.TIMESTAMP(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
+    sa.Column('created_at', sa.TIMESTAMP(timezone=True), server_default=sa.text('now()'), nullable=False),
     sa.Column('expires_at', sa.TIMESTAMP(timezone=True), nullable=False),
     sa.Column('is_active', sa.Boolean(), nullable=False),
     sa.Column('is_expired', sa.Boolean(), nullable=False),
@@ -322,10 +346,14 @@ def upgrade() -> None:
     sa.Column('vaccine_name', sa.String(length=100), nullable=False),
     sa.Column('price_per_dose', sa.Numeric(precision=10, scale=2), nullable=False),
     sa.Column('quantity', sa.Integer(), nullable=False),
+    sa.Column('reserved_quantity', sa.Integer(), nullable=False),
     sa.Column('batch_number', sa.String(length=100), nullable=False),
     sa.Column('is_published', sa.Boolean(), nullable=False),
     sa.Column('added_by_id', sa.UUID(), nullable=True),
-    sa.Column('created_at', sa.TIMESTAMP(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
+    sa.Column('created_at', sa.TIMESTAMP(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.CheckConstraint('quantity >= 0', name='ck_quantity_non_negative'),
+    sa.CheckConstraint('reserved_quantity <= quantity', name='ck_reserved_lte_quantity'),
+    sa.CheckConstraint('reserved_quantity >= 0', name='ck_reserved_non_negative'),
     sa.ForeignKeyConstraint(['added_by_id'], ['users.id'], ondelete='SET NULL'),
     sa.PrimaryKeyConstraint('id')
     )
@@ -343,8 +371,8 @@ def upgrade() -> None:
     sa.Column('preliminary_diagnosis', sa.Text(), nullable=True),
     sa.Column('actual_diagnosis', sa.Text(), nullable=True),
     sa.Column('is_deleted', sa.Boolean(), nullable=False),
-    sa.Column('diagnosed_on', sa.TIMESTAMP(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
-    sa.Column('updated_at', sa.TIMESTAMP(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
+    sa.Column('diagnosed_on', sa.TIMESTAMP(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.Column('updated_at', sa.TIMESTAMP(timezone=True), server_default=sa.text('now()'), nullable=False),
     sa.Column('deleted_at', sa.TIMESTAMP(timezone=True), nullable=True),
     sa.ForeignKeyConstraint(['diagnosed_by_id'], ['users.id'], ondelete='SET NULL'),
     sa.ForeignKeyConstraint(['patient_id'], ['patients.id'], ondelete='CASCADE'),
@@ -354,33 +382,6 @@ def upgrade() -> None:
         batch_op.create_index(batch_op.f('ix_diagnoses_id'), ['id'], unique=False)
         batch_op.create_index(batch_op.f('ix_diagnoses_is_deleted'), ['is_deleted'], unique=False)
         batch_op.create_index(batch_op.f('ix_diagnoses_patient_id'), ['patient_id'], unique=False)
-
-    op.create_table('medication_schedules',
-    sa.Column('id', sa.UUID(), nullable=False),
-    sa.Column('patient_id', sa.UUID(), nullable=False),
-    sa.Column('medication_name', sa.String(length=255), nullable=False),
-    sa.Column('scheduled_date', sa.Date(), nullable=False),
-    sa.Column('quantity_purchased', sa.Integer(), nullable=True),
-    sa.Column('months_supply', sa.Integer(), nullable=True),
-    sa.Column('next_dose_due_date', sa.Date(), nullable=True),
-    sa.Column('is_completed', sa.Boolean(), nullable=False),
-    sa.Column('completed_date', sa.Date(), nullable=True),
-    sa.Column('lab_review_scheduled', sa.Boolean(), nullable=False),
-    sa.Column('lab_review_date', sa.Date(), nullable=True),
-    sa.Column('lab_review_completed', sa.Boolean(), nullable=False),
-    sa.Column('notes', sa.Text(), nullable=True),
-    sa.Column('updated_by_id', sa.UUID(), nullable=True),
-    sa.Column('created_at', sa.TIMESTAMP(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
-    sa.Column('updated_at', sa.TIMESTAMP(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
-    sa.ForeignKeyConstraint(['patient_id'], ['patients.id'], ondelete='CASCADE'),
-    sa.ForeignKeyConstraint(['updated_by_id'], ['users.id'], ondelete='SET NULL'),
-    sa.PrimaryKeyConstraint('id')
-    )
-    with op.batch_alter_table('medication_schedules', schema=None) as batch_op:
-        batch_op.create_index(batch_op.f('ix_medication_schedules_id'), ['id'], unique=False)
-        batch_op.create_index(batch_op.f('ix_medication_schedules_next_dose_due_date'), ['next_dose_due_date'], unique=False)
-        batch_op.create_index(batch_op.f('ix_medication_schedules_patient_id'), ['patient_id'], unique=False)
-        batch_op.create_index(batch_op.f('ix_medication_schedules_scheduled_date'), ['scheduled_date'], unique=False)
 
     op.create_table('patient_vaccine_purchases',
     sa.Column('id', sa.UUID(), nullable=False),
@@ -392,14 +393,15 @@ def upgrade() -> None:
     sa.Column('total_doses', sa.Integer(), nullable=False),
     sa.Column('total_package_price', sa.Numeric(precision=10, scale=2), nullable=False),
     sa.Column('amount_paid', sa.Numeric(precision=10, scale=2), nullable=False),
-    sa.Column('balance', sa.Numeric(precision=10, scale=2), nullable=False),
     sa.Column('payment_status', sa.Enum('PENDING', 'PARTIAL', 'COMPLETED', 'OVERDUE', name='paymentstatus'), nullable=False),
     sa.Column('doses_administered', sa.Integer(), nullable=False),
-    sa.Column('purchase_date', sa.TIMESTAMP(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
+    sa.Column('purchase_date', sa.TIMESTAMP(timezone=True), server_default=sa.text('now()'), nullable=False),
     sa.Column('is_active', sa.Boolean(), nullable=False),
+    sa.Column('notes', sa.Text(), nullable=True),
     sa.Column('created_by_id', sa.UUID(), nullable=True),
-    sa.Column('created_at', sa.TIMESTAMP(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
-    sa.Column('updated_at', sa.TIMESTAMP(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
+    sa.Column('created_at', sa.TIMESTAMP(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.Column('updated_at', sa.TIMESTAMP(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.CheckConstraint('amount_paid <= total_package_price', name='ck_amount_paid_lte_total'),
     sa.CheckConstraint('price_per_dose >= 0', name='ck_price_per_dose_non_negative'),
     sa.CheckConstraint('total_doses > 0', name='ck_total_doses_positive'),
     sa.ForeignKeyConstraint(['created_by_id'], ['users.id'], ondelete='SET NULL'),
@@ -437,8 +439,8 @@ def upgrade() -> None:
     sa.Column('end_date', sa.Date(), nullable=True),
     sa.Column('instructions', sa.Text(), nullable=True),
     sa.Column('is_active', sa.Boolean(), nullable=False),
-    sa.Column('created_at', sa.TIMESTAMP(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
-    sa.Column('updated_at', sa.TIMESTAMP(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
+    sa.Column('created_at', sa.TIMESTAMP(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.Column('updated_at', sa.TIMESTAMP(timezone=True), server_default=sa.text('now()'), nullable=False),
     sa.ForeignKeyConstraint(['patient_id'], ['patients.id'], ondelete='CASCADE'),
     sa.ForeignKeyConstraint(['prescribed_by_id'], ['users.id'], ondelete='SET NULL'),
     sa.ForeignKeyConstraint(['updated_by_id'], ['users.id'], ondelete='SET NULL'),
@@ -462,6 +464,36 @@ def upgrade() -> None:
     sa.ForeignKeyConstraint(['id'], ['patients.id'], ondelete='CASCADE'),
     sa.PrimaryKeyConstraint('id')
     )
+    op.create_table('medication_schedules',
+    sa.Column('id', sa.UUID(), nullable=False),
+    sa.Column('patient_id', sa.UUID(), nullable=False),
+    sa.Column('prescription_id', sa.UUID(), nullable=True),
+    sa.Column('medication_name', sa.String(length=255), nullable=False),
+    sa.Column('scheduled_date', sa.Date(), nullable=False),
+    sa.Column('quantity_purchased', sa.Integer(), nullable=True),
+    sa.Column('months_supply', sa.Integer(), nullable=True),
+    sa.Column('next_dose_due_date', sa.Date(), nullable=True),
+    sa.Column('is_completed', sa.Boolean(), nullable=False),
+    sa.Column('completed_date', sa.Date(), nullable=True),
+    sa.Column('lab_review_scheduled', sa.Boolean(), nullable=False),
+    sa.Column('lab_review_date', sa.Date(), nullable=True),
+    sa.Column('lab_review_completed', sa.Boolean(), nullable=False),
+    sa.Column('notes', sa.Text(), nullable=True),
+    sa.Column('updated_by_id', sa.UUID(), nullable=True),
+    sa.Column('created_at', sa.TIMESTAMP(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.Column('updated_at', sa.TIMESTAMP(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.ForeignKeyConstraint(['patient_id'], ['patients.id'], ondelete='CASCADE'),
+    sa.ForeignKeyConstraint(['prescription_id'], ['prescriptions.id'], ondelete='SET NULL'),
+    sa.ForeignKeyConstraint(['updated_by_id'], ['users.id'], ondelete='SET NULL'),
+    sa.PrimaryKeyConstraint('id')
+    )
+    with op.batch_alter_table('medication_schedules', schema=None) as batch_op:
+        batch_op.create_index(batch_op.f('ix_medication_schedules_id'), ['id'], unique=False)
+        batch_op.create_index(batch_op.f('ix_medication_schedules_next_dose_due_date'), ['next_dose_due_date'], unique=False)
+        batch_op.create_index(batch_op.f('ix_medication_schedules_patient_id'), ['patient_id'], unique=False)
+        batch_op.create_index(batch_op.f('ix_medication_schedules_prescription_id'), ['prescription_id'], unique=False)
+        batch_op.create_index(batch_op.f('ix_medication_schedules_scheduled_date'), ['scheduled_date'], unique=False)
+
     op.create_table('payments',
     sa.Column('id', sa.UUID(), nullable=False),
     sa.Column('vaccine_purchase_id', sa.UUID(), nullable=False),
@@ -472,7 +504,7 @@ def upgrade() -> None:
     sa.Column('reference_number', sa.String(length=100), nullable=True),
     sa.Column('notes', sa.Text(), nullable=True),
     sa.Column('received_by_id', sa.UUID(), nullable=True),
-    sa.Column('created_at', sa.TIMESTAMP(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
+    sa.Column('created_at', sa.TIMESTAMP(timezone=True), server_default=sa.text('now()'), nullable=False),
     sa.ForeignKeyConstraint(['patient_id'], ['patients.id'], ondelete='CASCADE'),
     sa.ForeignKeyConstraint(['received_by_id'], ['users.id'], ondelete='SET NULL'),
     sa.ForeignKeyConstraint(['vaccine_purchase_id'], ['patient_vaccine_purchases.id'], ondelete='CASCADE'),
@@ -496,8 +528,8 @@ def upgrade() -> None:
     sa.Column('notes', sa.Text(), nullable=True),
     sa.Column('outcome', postgresql.ENUM('LIVE_BIRTH', 'STILLBIRTH', 'MISCARRIAGE', 'ABORTION', 'ECTOPIC', name='pregnancy_outcome'), nullable=True),
     sa.Column('is_active', sa.Boolean(), nullable=False),
-    sa.Column('created_at', sa.TIMESTAMP(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
-    sa.Column('updated_at', sa.TIMESTAMP(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
+    sa.Column('created_at', sa.TIMESTAMP(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.Column('updated_at', sa.TIMESTAMP(timezone=True), server_default=sa.text('now()'), nullable=False),
     sa.CheckConstraint('pregnancy_number > 0', name='ck_pregnancy_number_positive'),
     sa.ForeignKeyConstraint(['patient_id'], ['pregnant_patients.id'], ondelete='CASCADE'),
     sa.PrimaryKeyConstraint('id'),
@@ -521,7 +553,7 @@ def upgrade() -> None:
     sa.Column('vaccine_price', sa.Numeric(precision=10, scale=2), nullable=False),
     sa.Column('administered_by_id', sa.UUID(), nullable=True),
     sa.Column('notes', sa.Text(), nullable=True),
-    sa.Column('created_at', sa.TIMESTAMP(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
+    sa.Column('created_at', sa.TIMESTAMP(timezone=True), server_default=sa.text('now()'), nullable=False),
     sa.ForeignKeyConstraint(['administered_by_id'], ['users.id'], ondelete='SET NULL'),
     sa.ForeignKeyConstraint(['patient_id'], ['patients.id'], ondelete='CASCADE'),
     sa.ForeignKeyConstraint(['vaccine_purchase_id'], ['patient_vaccine_purchases.id'], ondelete='CASCADE'),
@@ -542,12 +574,14 @@ def upgrade() -> None:
     sa.Column('sex', postgresql.ENUM('MALE', 'FEMALE', name='sex'), nullable=True),
     sa.Column('six_month_checkup_date', sa.Date(), nullable=True),
     sa.Column('six_month_checkup_completed', sa.Boolean(), nullable=False),
-    sa.Column('hep_b_antibody_test_result', sa.String(length=100), nullable=True),
+    sa.Column('hep_b_antibody_test_result', postgresql.ENUM('POSITIVE', 'NEGATIVE', 'INDETERMINATE', 'PENDING', name='hep_b_test_result'), nullable=True),
     sa.Column('test_date', sa.Date(), nullable=True),
     sa.Column('notes', sa.Text(), nullable=True),
-    sa.Column('created_at', sa.TIMESTAMP(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
-    sa.Column('updated_at', sa.TIMESTAMP(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
+    sa.Column('updated_by_id', sa.UUID(), nullable=True),
+    sa.Column('created_at', sa.TIMESTAMP(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.Column('updated_at', sa.TIMESTAMP(timezone=True), server_default=sa.text('now()'), nullable=False),
     sa.ForeignKeyConstraint(['pregnancy_id'], ['pregnancies.id'], ondelete='CASCADE'),
+    sa.ForeignKeyConstraint(['updated_by_id'], ['users.id'], ondelete='SET NULL'),
     sa.PrimaryKeyConstraint('id')
     )
     with op.batch_alter_table('children', schema=None) as batch_op:
@@ -564,8 +598,8 @@ def upgrade() -> None:
     sa.Column('status', postgresql.ENUM('PENDING', 'SENT', 'FAILED', 'CANCELLED', name='reminderstatus'), nullable=False),
     sa.Column('sent_at', sa.TIMESTAMP(timezone=True), nullable=True),
     sa.Column('child_id', sa.UUID(), nullable=True),
-    sa.Column('created_at', sa.TIMESTAMP(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
-    sa.Column('updated_at', sa.TIMESTAMP(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
+    sa.Column('created_at', sa.TIMESTAMP(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.Column('updated_at', sa.TIMESTAMP(timezone=True), server_default=sa.text('now()'), nullable=False),
     sa.ForeignKeyConstraint(['child_id'], ['children.id'], ondelete='CASCADE'),
     sa.ForeignKeyConstraint(['patient_id'], ['patients.id'], ondelete='CASCADE'),
     sa.PrimaryKeyConstraint('id')
@@ -620,6 +654,14 @@ def downgrade() -> None:
         batch_op.drop_index(batch_op.f('ix_payments_id'))
 
     op.drop_table('payments')
+    with op.batch_alter_table('medication_schedules', schema=None) as batch_op:
+        batch_op.drop_index(batch_op.f('ix_medication_schedules_scheduled_date'))
+        batch_op.drop_index(batch_op.f('ix_medication_schedules_prescription_id'))
+        batch_op.drop_index(batch_op.f('ix_medication_schedules_patient_id'))
+        batch_op.drop_index(batch_op.f('ix_medication_schedules_next_dose_due_date'))
+        batch_op.drop_index(batch_op.f('ix_medication_schedules_id'))
+
+    op.drop_table('medication_schedules')
     op.drop_table('regular_patients')
     with op.batch_alter_table('prescriptions', schema=None) as batch_op:
         batch_op.drop_index(batch_op.f('ix_prescriptions_prescription_date'))
@@ -638,13 +680,6 @@ def downgrade() -> None:
         batch_op.drop_index(batch_op.f('ix_patient_vaccine_purchases_batch_number'))
 
     op.drop_table('patient_vaccine_purchases')
-    with op.batch_alter_table('medication_schedules', schema=None) as batch_op:
-        batch_op.drop_index(batch_op.f('ix_medication_schedules_scheduled_date'))
-        batch_op.drop_index(batch_op.f('ix_medication_schedules_patient_id'))
-        batch_op.drop_index(batch_op.f('ix_medication_schedules_next_dose_due_date'))
-        batch_op.drop_index(batch_op.f('ix_medication_schedules_id'))
-
-    op.drop_table('medication_schedules')
     with op.batch_alter_table('diagnoses', schema=None) as batch_op:
         batch_op.drop_index(batch_op.f('ix_diagnoses_patient_id'))
         batch_op.drop_index(batch_op.f('ix_diagnoses_is_deleted'))
@@ -739,6 +774,14 @@ def downgrade() -> None:
         batch_op.drop_index(batch_op.f('ix_permissions_name'))
 
     op.drop_table('permissions')
+    with op.batch_alter_table('job_queue', schema=None) as batch_op:
+        batch_op.drop_index(batch_op.f('ix_job_queue_status'))
+        batch_op.drop_index(batch_op.f('ix_job_queue_job_type'))
+        batch_op.drop_index(batch_op.f('ix_job_queue_id'))
+        batch_op.drop_index('idx_jobqueue_type_status')
+        batch_op.drop_index('idx_jobqueue_status_scheduled')
+
+    op.drop_table('job_queue')
     with op.batch_alter_table('facilities', schema=None) as batch_op:
         batch_op.drop_index(batch_op.f('ix_facilities_id'))
         batch_op.drop_index(batch_op.f('ix_facilities_facility_name'))

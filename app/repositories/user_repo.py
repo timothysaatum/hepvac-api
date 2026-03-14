@@ -1,3 +1,4 @@
+import uuid
 from datetime import datetime, timezone
 from app.models.user_model import User as UserModel
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,7 +13,7 @@ class UserRepository:
     def __init__(self, db: AsyncSession):
         self.db = db
 
-    async def get_user_by_id(self, user_id: str) -> Optional[UserModel]:
+    async def get_user_by_id(self, user_id: uuid.UUID) -> Optional[UserModel]:
         """
         Get user by ID.
 
