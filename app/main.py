@@ -84,6 +84,9 @@ def create_app() -> FastAPI:
         title=settings.PROJECT_NAME,
         version=settings.VERSION,
         lifespan=lifespan,
+        docs_url=None if settings.ENVIRONMENT == "production" else "/docs",
+        redoc_url=None if settings.ENVIRONMENT == "production" else "/redoc",
+        openapi_url=None if settings.ENVIRONMENT == "production" else "/openapi.json",
     )
 
     # ---------------------- EXCEPTION HANDLER ----------------------
