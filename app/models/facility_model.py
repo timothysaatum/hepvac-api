@@ -33,6 +33,8 @@ class Facility(Base):
     __table_args__ = (
         # Composite index for common manager + date-range queries.
         Index("idx_facility_manager_created", "facility_manager_id", "created_at"),
+        Index("idx_facility_email", "email"),
+        Index("idx_facility_created_at", "created_at"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(

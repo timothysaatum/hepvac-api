@@ -73,6 +73,9 @@ class JobQueue(Base):
         Index("idx_jobqueue_status_scheduled", "status", "scheduled_at"),
         # Useful for monitoring per job type
         Index("idx_jobqueue_type_status", "job_type", "status"),
+        Index("idx_jobqueue_locked_until", "locked_until"),  # for reclaiming stuck jobs
+        Index("idx_jobqueue_scheduled_status_retries", "scheduled_at", "status", "retry_count"),
+        Index("idx_jobqueue_created_at", "created_at"),
     )
 
     def __repr__(self):
