@@ -249,7 +249,9 @@ async def open_pregnancy(
     service = PatientService(db)
     try:
         pregnancy_data.patient_id = patient_id
-        pregnancy = await service.open_pregnancy(patient_id, pregnancy_data)
+        pregnancy = await service.open_pregnancy(
+            patient_id, pregnancy_data, current_user.id
+        )
 
         logger.log_info({
             "event": "pregnancy_opened",

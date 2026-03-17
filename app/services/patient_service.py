@@ -431,6 +431,7 @@ class PatientService:
         self,
         patient_id: uuid.UUID,
         pregnancy_data: PregnancyCreateSchema,
+        updated_by_id: uuid.UUID,
     ) -> Pregnancy:
         """
         Open a new pregnancy episode for a returning pregnant patient.
@@ -465,7 +466,7 @@ class PatientService:
             pregnancy.notes = pregnancy_data.notes
 
         # Persist the updated gravida count and the new Pregnancy row.
-        await self.repo.update_pregnant_patient(patient_id, patient)
+        await self.repo.update_pregnant_patient(updated_by_id, patient)
         created_pregnancy = await self.repo.create_pregnancy(pregnancy)
 
         # Generate delivery reminders if EDD was provided when opening the episode
