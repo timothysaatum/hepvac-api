@@ -1,6 +1,9 @@
 # ============= REPOSITORY =============
 from typing import List, Optional
 import uuid
+from aiosmtplib import status
+from aiosmtplib import status
+from dns.resolver import query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from datetime import datetime, timedelta, timezone
@@ -58,6 +61,26 @@ class SecurityRepository:
         query = select(TrustedDevice).where(
             TrustedDevice.status == DeviceStatus.PENDING
         )
+
+        if facility_id:
+            query = query.join(
+                User, TrustedDevice.user_id == User.id
+            ).where(User.facility_id == facility_id)
+
+        query = query.order_by(TrustedDevice.first_seen.desc())
+
+        result = await self.db.execute(query)
+        return list(result.scalars().all())
+    
+    async def get_all_devices(
+        self,
+        facility_id: Optional[uuid.UUID] = None,
+        status: Optional["DeviceStatus"] = None,
+    ) -> List["TrustedDevice"]:
+        query = select(TrustedDevice)
+
+        if status:
+            query = query.where(TrustedDevice.status == status)
 
         if facility_id:
             query = query.join(

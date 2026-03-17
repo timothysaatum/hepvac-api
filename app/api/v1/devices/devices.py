@@ -1,9 +1,10 @@
 # ============= ROUTES =============
-from typing import List
+from typing import List, Optional
 import uuid
 from fastapi import APIRouter, Depends
 from app.api.dependencies import get_db
 from app.core.permission_checker import require_admin, require_staff_or_admin
+from app.middlewares.device_trust import DeviceStatus
 from app.middlewares.device_trust_schemas import DeviceApprovalSchema, TrustedDeviceResponse
 from app.middlewares.device_trust_service import SecurityService
 from app.models.user_model import User
@@ -95,3 +96,22 @@ async def revoke_device(
     )
 
     return {"message": "Device revoked successfully"}
+
+
+@router.get("/devices", response_model=List[TrustedDeviceResponse])
+async def get_all_devices(
+    status: Optional[DeviceStatus] = None,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_admin()),
+):
+    """
+    Get all devices with optional status filter (Admin only).
+    e.g. /security/devices?status=trusted
+         /security/devices?status=pending
+         /security/devices (all statuses)
+    """
+    service = SecurityService(db)
+    devices = await service.get_all_devices(current_user.facility_id, status)
+    return [
+        TrustedDeviceResponse.model_validate(d, from_attributes=True) for d in devices
+    ]

@@ -76,3 +76,10 @@ class SecurityService:
                 status_code=status.HTTP_404_NOT_FOUND, detail="Device not found"
             )
         return device
+    
+    async def get_all_devices(
+        self,
+        facility_id: Optional[uuid.UUID] = None,
+        status: Optional[DeviceStatus] = None,
+    ) -> List[TrustedDevice]:
+        return await self.repo.get_all_devices(facility_id, status)
