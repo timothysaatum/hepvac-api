@@ -270,10 +270,13 @@ class PatientService:
 
         await self.db.commit()
 
-        # Expire the identity map so the next SELECT sees the updated discriminator.
-        # Without this, SQLAlchemy's cache still holds the PregnantPatient object
-        # for this PK and the RegularPatient query returns None.
-        self.db.expire_all()
+        # FIX: expunge_all() instead of expire_all().
+        # expire_all() only marks attributes stale — it does NOT remove the
+        # PregnantPatient object from the identity map. The subsequent
+        # select(RegularPatient) would find the cached PregnantPatient for this
+        # PK and return None or the wrong type. expunge_all() fully evicts all
+        # objects so the next SELECT builds a fresh RegularPatient from the DB.
+        self.db.expunge_all()
 
         # Reload with a clean SELECT with all eager loads the response schema needs.
         # RegularPatient relationships are lazy="noload" — selectinload is required
@@ -998,10 +1001,14 @@ class PatientService:
         """
         from sqlalchemy import text as _text, select as _select
 
-        # Expire the identity map before ANY ORM query so this request always
-        # reads the current discriminator from the DB, not a cached mapper from
-        # a prior request in the same worker process.
-        self.db.expire_all()
+        # FIX: expunge_all() instead of expire_all().
+        # expire_all() only marks attributes stale — it does NOT evict objects
+        # from the identity map. If a prior request in the same worker loaded
+        # this patient as PregnantPatient, get_regular_patient_by_id() would
+        # encounter a discriminator mismatch, silently return None, and cause
+        # a false 409. expunge_all() fully clears the identity map so every
+        # subsequent query builds fresh ORM instances from the current DB state.
+        self.db.expunge_all()
 
         regular = await self.repo.get_regular_patient_by_id(patient_id)
         if not regular:
@@ -1029,8 +1036,16 @@ class PatientService:
         )
         await self.db.commit()
 
-        # Expire the session so the next SELECT sees the new discriminator.
-        self.db.expire_all()
+        # FIX: expunge_all() instead of expire_all().
+        # This is the critical call. After the raw SQL UPDATE above, the identity
+        # map still holds the RegularPatient instance for this UUID. expire_all()
+        # would refresh its attribute values but cannot change its Python class.
+        # The subsequent select(PregnantPatient) would hit the identity map,
+        # find the cached RegularPatient, and return it — causing the
+        # AttributeError: 'RegularPatient' object has no attribute 'open_new_pregnancy'.
+        # expunge_all() fully evicts all objects so SQLAlchemy builds a fresh
+        # PregnantPatient from the updated DB row.
+        self.db.expunge_all()
 
         # Load the existing PregnantPatient row with all relationships the response
         # schema needs (facility, created_by, updated_by, pregnancies).
@@ -1080,7 +1095,7 @@ class PatientService:
         # After commit, do a final SELECT with all eager loads so the response
         # schema can access facility/created_by/updated_by/pregnancies without
         # triggering implicit lazy loads on an async session (MissingGreenlet).
-        self.db.expire_all()
+        self.db.expunge_all()
         final = await self.db.execute(
             _select(PregnantPatient)
             .where(PregnantPatient.id == patient_id)

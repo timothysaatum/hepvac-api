@@ -154,28 +154,29 @@ class PatientRepository:
     ) -> Optional[PregnantPatient]:
         """Get pregnant patient by ID with all relationships eagerly loaded.
 
-        Returns None (rather than raising) when the patient exists but the
-        discriminator no longer matches PregnantPatient — i.e. was converted
-        to REGULAR.  The caller (service layer) decides how to handle it.
+        Returns None when no row matching PregnantPatient's discriminator exists
+        for this ID (i.e. the patient was converted to REGULAR or never existed).
+
+        FIX: Removed the InvalidRequestError try/except that was silently
+        swallowing identity map discriminator mismatches. The service layer now
+        calls expunge_all() before any discriminator-sensitive query, so the
+        identity map is always clean and this exception can never fire. Keeping
+        the catch block was masking real bugs and causing false 409s.
         """
-        from sqlalchemy.exc import InvalidRequestError
-        try:
-            result = await self.db.execute(
-                select(PregnantPatient)
-                .where(
-                    PregnantPatient.id == patient_id,
-                    PregnantPatient.is_deleted == False,
-                )
-                .options(
-                    selectinload(PregnantPatient.facility),
-                    selectinload(PregnantPatient.created_by),
-                    selectinload(PregnantPatient.updated_by),
-                )
+        result = await self.db.execute(
+            select(PregnantPatient)
+            .where(
+                PregnantPatient.id == patient_id,
+                PregnantPatient.is_deleted == False,
             )
-            return result.scalars().first()
-        except InvalidRequestError:
-            # Discriminator mismatch — patient was converted to REGULAR.
-            return None
+            .options(
+                selectinload(PregnantPatient.facility),
+                selectinload(PregnantPatient.created_by),
+                selectinload(PregnantPatient.updated_by),
+                selectinload(PregnantPatient.pregnancies),
+            )
+        )
+        return result.scalars().first()
 
     async def update_pregnant_patient(
         self, updated_by_id: uuid.UUID, patient: PregnantPatient
@@ -203,33 +204,28 @@ class PatientRepository:
     ) -> Optional[RegularPatient]:
         """Get regular patient by ID with all relationships eagerly loaded.
 
-        Returns None (rather than raising) when the patient exists but the
-        discriminator no longer matches RegularPatient — i.e. was re-registered
-        as pregnant.  The caller (service layer) decides how to handle it.
+        Returns None when no row matching RegularPatient's discriminator exists
+        for this ID (i.e. the patient was re-registered as pregnant or never existed).
 
-        This mirrors the same guard on get_pregnant_patient_by_id: SQLAlchemy's
-        identity map may cache the row under a different polymorphic mapper from
-        a prior request in the same worker, causing InvalidRequestError when the
-        discriminator has changed since the cache was populated.
+        FIX: Removed the InvalidRequestError try/except that was silently
+        swallowing identity map discriminator mismatches. The service layer now
+        calls expunge_all() before any discriminator-sensitive query, so the
+        identity map is always clean and this exception can never fire. Keeping
+        the catch block was masking real bugs and causing false 409s.
         """
-        from sqlalchemy.exc import InvalidRequestError
-        try:
-            result = await self.db.execute(
-                select(RegularPatient)
-                .where(
-                    RegularPatient.id == patient_id,
-                    RegularPatient.is_deleted == False,
-                )
-                .options(
-                    selectinload(RegularPatient.facility),
-                    selectinload(RegularPatient.created_by),
-                    selectinload(RegularPatient.updated_by),
-                )
+        result = await self.db.execute(
+            select(RegularPatient)
+            .where(
+                RegularPatient.id == patient_id,
+                RegularPatient.is_deleted == False,
             )
-            return result.scalars().first()
-        except InvalidRequestError:
-            # Discriminator mismatch — patient was re-registered as PREGNANT.
-            return None
+            .options(
+                selectinload(RegularPatient.facility),
+                selectinload(RegularPatient.created_by),
+                selectinload(RegularPatient.updated_by),
+            )
+        )
+        return result.scalars().first()
 
     async def update_regular_patient(
         self, updated_by_id: uuid.UUID, patient: RegularPatient
