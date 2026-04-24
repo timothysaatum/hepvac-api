@@ -25,46 +25,6 @@ from app.core.utils import logger
 router = APIRouter(prefix="/search", tags=["search"])
 
 
-# ============= Rate Limiting - SECURITY =============
-# Simple in-memory rate limiter (for production, use Redis)
-
-# class RateLimiter:
-#     """Simple rate limiter for search endpoints - SECURITY."""
-    
-#     def __init__(self, max_requests: int = 30, window_seconds: int = 60):
-#         self.max_requests = max_requests
-#         self.window_seconds = window_seconds
-#         self.requests = defaultdict(list)
-    
-#     def is_allowed(self, user_id: str) -> bool:
-#         """Check if request is allowed."""
-#         now = datetime.now()
-#         # Clean old requests
-#         self.requests[user_id] = [
-#             req_time for req_time in self.requests[user_id]
-#             if now - req_time < timedelta(seconds=self.window_seconds)
-#         ]
-        
-#         # Check limit
-#         if len(self.requests[user_id]) >= self.max_requests:
-#             return False
-        
-#         # Add current request
-#         self.requests[user_id].append(now)
-#         return True
-
-# # Global rate limiter instance
-# search_rate_limiter = RateLimiter(max_requests=30, window_seconds=60)
-
-
-# def check_rate_limit(current_user: User):
-#     """Dependency to check rate limit - SECURITY."""
-#     if not search_rate_limiter.is_allowed(str(current_user.id)):
-#         raise HTTPException(
-#             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-#             detail="Too many search requests. Please try again later.",
-#         )
-
 
 # ============= Default Top 10 Helper =============
 async def get_default_results(
@@ -214,7 +174,7 @@ async def search_patients(
         })
         raise HTTPException(
             status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An error occurred while searching patients",
+            detail=str(e),
         )
 
 

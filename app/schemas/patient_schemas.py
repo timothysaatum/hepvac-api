@@ -32,6 +32,7 @@ class PatientStatus(str, Enum):
     POSTPARTUM = "postpartum"
     COMPLETED  = "completed"
     INACTIVE   = "inactive"
+    CONVERTED  = "converted"
 
 
 class Sex(str, Enum):
@@ -818,6 +819,63 @@ class ReRegisterAsPregnantSchema(BaseModel):
 
 
 # ============================================================================
+# Patient Search Result
+# ============================================================================
+
+
+class PatientSearchResult(BaseModel):
+    """
+    Compact patient record returned by the search endpoint.
+
+    IMPORTANT — id must always come from patients.id (the base table PK).
+    Never populate this from the polymorphic join columns (pregnant_patients.id
+    or regular_patients.id); those columns are NULL when the patient lacks that
+    subtype row, which causes a Pydantic validation error.
+
+    The correct way to build this from an ORM result is:
+        PatientSearchResult.model_validate(patient)   # from_attributes=True reads patient.id
+    or:
+        PatientSearchResult(id=patient.id, ...)       # explicit — safest
+
+    Never do:
+        PatientSearchResult(**row._mapping)           # mapping has id_1/id_2 ambiguity
+        PatientSearchResult(id=row.id_1, ...)         # id_1 is None for regular-only patients
+    """
+
+    id:           uuid.UUID
+    name:         Optional[str]        = None
+    phone:        Optional[str]        = None
+    sex:          Sex
+    date_of_birth: Optional[date]      = None
+    patient_type: str
+    status:       PatientStatus
+    facility_id:  Optional[uuid.UUID]  = None
+    created_at:   datetime
+
+    model_config = {"from_attributes": True}
+
+    @classmethod
+    def from_patient(cls, patient: "Patient") -> "PatientSearchResult":
+        """
+        Build a search result from any Patient ORM object (base, pregnant, or regular).
+
+        Explicitly reads patient.id — never touches the subtype join columns —
+        so this is safe to call after a with_polymorphic query.
+        """
+        return cls(
+            id=patient.id,                      # always patients.id — never NULL
+            name=patient.name,
+            phone=patient.phone,
+            sex=patient.sex,
+            date_of_birth=patient.date_of_birth,
+            patient_type=patient.patient_type,
+            status=patient.status,
+            facility_id=patient.facility_id,
+            created_at=patient.created_at,
+        )
+
+
+# ============================================================================
 # Diagnosis
 # ============================================================================
 
@@ -830,8 +888,19 @@ class DiagnosisBaseSchema(BaseModel):
     model_config = {"from_attributes": True}
 
 
-class DiagnosisCreateSchema(DiagnosisBaseSchema):
-    pass
+class DiagnosisCreateSchema(BaseModel):
+    """
+    Create a diagnosis record.
+    
+    `patient_id` and `diagnosed_by_id` are set by the route handler:
+    - `patient_id` from the URL path
+    - `diagnosed_by_id` from the current user
+    """
+    patient_id:              Optional[uuid.UUID] = None
+    diagnosed_by_id:         Optional[uuid.UUID] = None
+    history:                 Optional[str] = None
+    preliminary_diagnosis:   Optional[str] = None
+    model_config = {"from_attributes": True}
 
 
 class DiagnosisUpdateSchema(BaseModel):

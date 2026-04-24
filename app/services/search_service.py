@@ -16,6 +16,7 @@ from app.schemas.search_schemas import (
 )
 from decimal import Decimal
 from app.models.patient_model import Patient, Vaccination, Payment
+from app.schemas.patient_schemas import PatientType, PregnancySummarySchema
 
 
 class SearchService:
@@ -77,7 +78,7 @@ class SearchService:
 
         # Convert to response models
         items = [self._patient_to_search_result(p) for p in patients]
-
+        print(items)
         # Calculate pagination info
         total_pages = math.ceil(total_count / page_size) if total_count > 0 else 0
         has_next = page < total_pages
@@ -107,16 +108,20 @@ class SearchService:
             "created_at": patient.created_at,
         }
 
-        # Add type-specific fields
-        if patient.patient_type == "pregnant":
-            result_dict[
-                "expected_delivery_date"] = patient.active_pregnancy.expected_delivery_date if patient.active_pregnancy else None
-            result_dict[
-                "actual_delivery_date"] = patient.active_pregnancy.actual_delivery_date if patient.active_pregnancy else None
-        elif patient.patient_type == "regular":
-            result_dict["diagnosis_date"] = patient.diagnosis_date
-            result_dict["treatment_start_date"] = patient.treatment_start_date
-            result_dict["viral_load"] = patient.viral_load
+        # BUG FIX: compare against PatientType enum members, not plain strings.
+        # patient.patient_type is a PatientType enum; "pregnant" == PatientType.PREGNANT
+        # is always False, making both branches dead code with string comparisons.
+        if patient.patient_type == PatientType.PREGNANT:
+            # BUG FIX: schema uses active_pregnancy: Optional[PregnancySummarySchema],
+            # not the old flat expected_delivery_date / actual_delivery_date keys.
+            active = getattr(patient, "active_pregnancy", None)
+            result_dict["active_pregnancy"] = (
+                PregnancySummarySchema.model_validate(active) if active else None
+            )
+        elif patient.patient_type == PatientType.REGULAR:
+            result_dict["diagnosis_date"] = getattr(patient, "diagnosis_date", None)
+            result_dict["treatment_start_date"] = getattr(patient, "treatment_start_date", None)
+            result_dict["viral_load"] = getattr(patient, "viral_load", None)
 
         return PatientSearchResult(**result_dict)
 

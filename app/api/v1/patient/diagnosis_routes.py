@@ -31,10 +31,15 @@ async def create_diagnosis(
     """Create a diagnosis record for a patient (Staff only)."""
     service = PatientService(db)
     try:
-        diagnosis_data.patient_id = patient_id
-        diagnosis_data.diagnosed_by_id = current_user.id
+        # Set patient_id and diagnosed_by_id from URL path and current user
+        diagnosis_payload = DiagnosisCreateSchema(
+            patient_id=patient_id,
+            diagnosed_by_id=current_user.id,
+            history=diagnosis_data.history,
+            preliminary_diagnosis=diagnosis_data.preliminary_diagnosis,
+        )
 
-        diagnosis = await service.create_diagnosis(diagnosis_data)
+        diagnosis = await service.create_diagnosis(diagnosis_payload)
 
         logger.log_info({
             "event": "diagnosis_created",

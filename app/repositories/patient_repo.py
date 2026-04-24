@@ -100,6 +100,58 @@ class PatientRepository:
         await self.db.commit()
         await self.db.refresh(patient)
 
+    async def search_patients(
+        self,
+        query: str,
+        facility_id: Optional[uuid.UUID] = None,
+        skip: int = 0,
+        limit: int = 10,
+    ) -> tuple[List[Patient], int]:
+        """
+        Full-text patient search by name or phone, with optional facility scope.
+
+        Uses with_polymorphic so subtype columns are available, but critically
+        uses result.scalars() to get proper ORM objects whose .id attribute is
+        always patients.id (never NULL).  Do NOT use result.mappings() here —
+        the polymorphic LEFT JOINs produce three 'id' columns (id, id_1, id_2)
+        and accessing a mapping dict by key 'id' can silently resolve to the
+        subtype column, which is NULL for patients without that subtype row.
+        """
+        poly_patient = with_polymorphic(Patient, [PregnantPatient, RegularPatient])
+
+        base_query = select(poly_patient).where(
+            poly_patient.is_deleted == False,
+        )
+
+        if query:
+            search_term = f"%{query.strip()}%"
+            from sqlalchemy import or_
+            base_query = base_query.where(
+                or_(
+                    poly_patient.name.ilike(search_term),
+                    poly_patient.phone.ilike(search_term),
+                )
+            )
+
+        if facility_id:
+            base_query = base_query.where(poly_patient.facility_id == facility_id)
+
+        base_query = base_query.order_by(poly_patient.created_at.desc())
+
+        count_query = select(func.count()).select_from(base_query.subquery())
+        total_result = await self.db.execute(count_query)
+        total_count = total_result.scalar() or 0
+
+        paginated_query = base_query.offset(skip).limit(limit)
+        result = await self.db.execute(paginated_query)
+
+        # .scalars() returns proper ORM Patient/PregnantPatient/RegularPatient
+        # instances.  Each instance's .id maps to patients.id (the PK) —
+        # never to the nullable subtype join columns id_1 / id_2.
+        patients = list(result.scalars().all())
+
+        return patients, total_count
+
     async def list_patients_paginated(
         self,
         facility_id: Optional[uuid.UUID] = None,
