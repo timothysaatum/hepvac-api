@@ -845,7 +845,7 @@ class Child(Base):
         "Pregnancy",
         back_populates="children",
         foreign_keys=[pregnancy_id],
-        lazy="selectin",
+        lazy="noload",
     )
     updated_by: Mapped[Optional["User"]] = relationship(
         "User",

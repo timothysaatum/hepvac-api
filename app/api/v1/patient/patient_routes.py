@@ -22,6 +22,8 @@ from app.core.utils import logger
 from app.models.user_model import User
 from app.schemas.patient_schemas import (
     ConvertToRegularPatientSchema,
+    PatientResponseSchema,
+    PatientSearchResult,
     ReRegisterAsPregnantSchema,
     PatientType,
     PregnancyCloseSchema,
@@ -553,6 +555,137 @@ async def update_regular_patient(
             detail="An error occurred while updating the patient.",
         )
 
+@router.get(
+    "/{patient_id}",
+    response_model=PatientResponseSchema,
+    response_model_exclude_none=True,
+)
+async def get_patient(
+    patient_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_staff_or_admin()),
+):
+    service = PatientService(db)
+
+    try:
+        patient = await service.get_patient(patient_id)
+
+        if patient.patient_type == PatientType.PREGNANT:
+            return PatientResponseSchema(
+                patient_type=PatientType.PREGNANT,
+                data=PregnantPatientResponseSchema.from_patient(patient),
+            )
+
+        if patient.patient_type == PatientType.REGULAR:
+            return PatientResponseSchema(
+                patient_type=PatientType.REGULAR,
+                data=RegularPatientResponseSchema.from_patient(patient),
+            )
+
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Unsupported patient type.",
+        )
+
+    except HTTPException:
+        raise
+
+    except Exception as e:
+        logger.log_error({
+            "event": "get_patient_error",
+            "patient_id": str(patient_id),
+            "error": str(e),
+            "user_id": str(current_user.id),
+        }, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An error occurred while retrieving the patient.",
+        )
+
+
+@router.patch(
+    "/{patient_id}",
+    response_model=PatientResponseSchema,
+    response_model_exclude_none=True,
+)
+async def update_patient(
+    patient_id: uuid.UUID,
+    update_data: PregnantPatientUpdateSchema | RegularPatientUpdateSchema,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_staff_or_admin()),
+):
+    """
+    Unified endpoint to update any patient (pregnant or regular).
+    
+    Automatically detects patient type and routes to appropriate service method.
+    For pregnancy clinical data updates, use PATCH /pregnancies/{pregnancy_id} instead.
+    """
+    service = PatientService(db)
+
+    try:
+        # Get patient to determine type
+        patient = await service.get_patient(patient_id)
+
+        if not patient:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Patient not found.",
+            )
+
+        # Route to appropriate update method based on patient type
+        if patient.patient_type == PatientType.PREGNANT:
+            updated = await service.update_pregnant_patient(
+                updated_by_id=current_user.id,
+                patient_id=patient_id,
+                update_data=update_data,
+            )
+            return PatientResponseSchema(
+                patient_type=PatientType.PREGNANT,
+                data=PregnantPatientResponseSchema.from_patient(updated),
+            )
+
+        if patient.patient_type == PatientType.REGULAR:
+            updated = await service.update_regular_patient(
+                updated_by_id=current_user.id,
+                patient_id=patient_id,
+                update_data=update_data,
+            )
+            return PatientResponseSchema(
+                patient_type=PatientType.REGULAR,
+                data=RegularPatientResponseSchema.from_patient(updated),
+            )
+
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Unsupported patient type.",
+        )
+
+    except HTTPException:
+        raise
+
+    except ValueError as e:
+        logger.log_error({
+            "event": "update_patient_validation_error",
+            "patient_id": str(patient_id),
+            "error": str(e),
+            "user_id": str(current_user.id),
+        })
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
+
+    except Exception as e:
+        logger.log_error({
+            "event": "update_patient_error",
+            "patient_id": str(patient_id),
+            "error": str(e),
+            "user_id": str(current_user.id),
+        }, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An error occurred while updating the patient.",
+        )
 
 # =============================================================================
 # Common patient
@@ -560,9 +693,7 @@ async def update_regular_patient(
 
 @router.get(
     "",
-    response_model=PaginatedResponse[
-        PregnantPatientResponseSchema | RegularPatientResponseSchema
-    ],
+    response_model=PaginatedResponse[PatientSearchResult],
 )
 async def list_patients(
     db: AsyncSession = Depends(get_db),
@@ -572,7 +703,7 @@ async def list_patients(
     patient_type: Optional[str] = None,
     patient_status: Optional[str] = None,
 ):
-    """Paginated list of patients with optional filters."""
+    """Paginated compact list of patients with optional filters."""
     try:
         patient_service = PatientService(db)
 
@@ -583,17 +714,39 @@ async def list_patients(
             page=pagination.page,
             page_size=pagination.page_size,
         )
+        print(f"=============================Patients count: {len(patients)}")
+        validated_items: list[PatientSearchResult] = []
+        skipped_count = 0
+        for i, patient in enumerate(patients):
+            try:
+                validated_items.append(PatientSearchResult.from_patient(patient))
+            except (ValueError, Exception) as exc:
+                # A single patient failing serialization (e.g. data-integrity gap:
+                # missing subtype row) must not 500 the entire listing.
+                # Log it prominently so it shows up in monitoring, then continue.
+                print(f"==============================={exc}============")
+                skipped_count += 1
+                logger.log_error({
+                    "event":        "patient_serialization_skipped",
+                    "patient_id":   str(getattr(patient, "id", "unknown")),
+                    "patient_type": str(getattr(patient, "patient_type", "unknown")),
+                    "patient_name": str(getattr(patient, "name", "unknown")),
+                    "error":        str(exc),
+                    "error_type":   type(exc).__name__,
+                    "user_id":      str(current_user.id),
+                    "batch_index":  i,
+                })
 
-        validated_items = []
-        for patient in patients:
-            if patient.patient_type == PatientType.PREGNANT:
-                validated_items.append(
-                    PregnantPatientResponseSchema.from_patient(patient)
-                )
-            else:
-                validated_items.append(
-                    RegularPatientResponseSchema.from_patient(patient)
-                )
+        if skipped_count:
+            logger.log_error({
+                "event":         "list_patients_partial_result",
+                "skipped_count": skipped_count,
+                "total_db_rows": len(patients),
+                "displayed_count": len(validated_items),
+                "note":          "One or more patient rows could not be serialised. "
+                                 "Check for missing subtype rows (orphan patients records).",
+                "user_id":       str(current_user.id),
+            })
 
         total_pages = ceil(total_count / pagination.page_size) if total_count > 0 else 0
         has_next = pagination.page < total_pages
@@ -640,7 +793,6 @@ async def list_patients(
         )
 
 
-
 # =============================================================================
 # Re-register as pregnant
 # =============================================================================
@@ -662,6 +814,12 @@ async def re_register_as_pregnant(
     Flips the patient_type discriminator back to PREGNANT, then opens a new
     Pregnancy episode on the existing pregnant_patients row.  All historical
     data (previous pregnancies, children, vaccines, prescriptions) stays intact.
+    
+    **ROBUST ERROR HANDLING**:
+    - Auto-creates missing pregnant_patients rows if data inconsistencies exist
+    - Validates all data before conversion
+    - Proper transaction rollback on failure
+    - Detailed error messages for debugging
     """
     service = PatientService(db)
     user_id = current_user.id
@@ -674,6 +832,7 @@ async def re_register_as_pregnant(
             "event": "patient_re_registered_as_pregnant",
             "patient_id": str(patient_id),
             "re_registered_by": str(user_id),
+            "gravida_count": patient.gravida if hasattr(patient, "gravida") else None,
         })
 
         return PregnantPatientResponseSchema.from_patient(patient)
@@ -681,16 +840,29 @@ async def re_register_as_pregnant(
     except HTTPException:
         raise
 
+    except ValueError as e:
+        logger.log_warning({
+            "event": "re_register_validation_error",
+            "patient_id": str(patient_id),
+            "error": str(e),
+            "user_id": str(user_id),
+        })
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Re-registration validation failed: {str(e)}",
+        )
+
     except Exception as e:
         logger.log_error({
             "event": "re_register_pregnant_error",
             "patient_id": str(patient_id),
             "error": str(e),
+            "error_type": type(e).__name__,
             "user_id": str(user_id),
         }, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An error occurred while re-registering the patient.",
+            detail="An error occurred while re-registering the patient. Please ensure the patient exists and is registered as regular.",
         )
 
 

@@ -9,7 +9,10 @@ import uuid
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy import func
-from sqlalchemy.orm import selectinload, with_polymorphic
+from sqlalchemy.orm import selectinload
+
+from app.schemas.patient_schemas import PatientType, ReminderStatus
+from app.core.pagination import PaginationParams, PaginatedResponse, PageInfo
 
 from app.models.patient_model import (
     Patient,
@@ -35,14 +38,35 @@ class PatientRepository:
     # =========================================================================
 
     async def get_patient_by_id(self, patient_id: uuid.UUID) -> Optional[Patient]:
-        """Get patient by ID."""
+        """
+        Get a patient by ID and return the correct polymorphic subtype.
+
+        This method first reads the base discriminator, then delegates to the
+        subtype-specific loader. That keeps response serialization safe in async
+        SQLAlchemy because the required relationships are eagerly loaded by the
+        subtype loaders.
+        """
         result = await self.db.execute(
-            select(Patient).where(
+            select(Patient.patient_type).where(
                 Patient.id == patient_id,
                 Patient.is_deleted == False,
             )
         )
-        return result.scalars().first()
+        patient_type = result.scalar_one_or_none()
+        if patient_type is None:
+            return None
+
+        # Clear any stale subtype instance from the identity map before loading
+        # through the current discriminator. This prevents converted patients
+        # from being represented as their old subtype in the same session.
+        self.db.expunge_all()
+
+        if patient_type == PatientType.PREGNANT:
+            return await self.get_pregnant_patient_by_id(patient_id)
+        if patient_type == PatientType.REGULAR:
+            return await self.get_regular_patient_by_id(patient_id)
+
+        return None
 
     async def get_patient_by_phone(
         self, phone: str, facility_id: uuid.UUID
@@ -110,33 +134,33 @@ class PatientRepository:
         """
         Full-text patient search by name or phone, with optional facility scope.
 
-        Uses with_polymorphic so subtype columns are available, but critically
-        uses result.scalars() to get proper ORM objects whose .id attribute is
-        always patients.id (never NULL).  Do NOT use result.mappings() here —
-        the polymorphic LEFT JOINs produce three 'id' columns (id, id_1, id_2)
-        and accessing a mapping dict by key 'id' can silently resolve to the
-        subtype column, which is NULL for patients without that subtype row.
-        """
-        poly_patient = with_polymorphic(Patient, [PregnantPatient, RegularPatient])
+        Uses plain select(Patient) rather than with_polymorphic.
+        PatientSearchResult only reads base-table columns so no subtype JOIN is
+        needed, and avoiding the JOIN eliminates the null-subtype-PK trap that
+        with_polymorphic exposes when a subtype row is missing: the LEFT JOIN
+        returns NULL for the subtype PK, which SQLAlchemy maps to .id on the
+        loaded instance, delivering id=None to the Pydantic layer.
 
-        base_query = select(poly_patient).where(
-            poly_patient.is_deleted == False,
-        )
+        Plain select(Patient) reads only patients.id — which is the base PK and
+        is never NULL — so the trap cannot fire.
+        """
+        from sqlalchemy import or_
+
+        base_query = select(Patient).where(Patient.is_deleted == False)
 
         if query:
             search_term = f"%{query.strip()}%"
-            from sqlalchemy import or_
             base_query = base_query.where(
                 or_(
-                    poly_patient.name.ilike(search_term),
-                    poly_patient.phone.ilike(search_term),
+                    Patient.name.ilike(search_term),
+                    Patient.phone.ilike(search_term),
                 )
             )
 
         if facility_id:
-            base_query = base_query.where(poly_patient.facility_id == facility_id)
+            base_query = base_query.where(Patient.facility_id == facility_id)
 
-        base_query = base_query.order_by(poly_patient.created_at.desc())
+        base_query = base_query.order_by(Patient.created_at.desc())
 
         count_query = select(func.count()).select_from(base_query.subquery())
         total_result = await self.db.execute(count_query)
@@ -144,10 +168,6 @@ class PatientRepository:
 
         paginated_query = base_query.offset(skip).limit(limit)
         result = await self.db.execute(paginated_query)
-
-        # .scalars() returns proper ORM Patient/PregnantPatient/RegularPatient
-        # instances.  Each instance's .id maps to patients.id (the PK) —
-        # never to the nullable subtype join columns id_1 / id_2.
         patients = list(result.scalars().all())
 
         return patients, total_count
@@ -161,22 +181,34 @@ class PatientRepository:
         limit: int = 10,
     ) -> tuple[List[Patient], int]:
         """
-        Paginated patient list with polymorphic subtype loading.
+        Paginated patient list — base columns only.
 
-        Uses with_polymorphic so subtype columns (PregnantPatient.gravida,
-        RegularPatient.viral_load, etc.) are available without extra queries.
+        Uses plain select(Patient) rather than with_polymorphic.
+        PatientSearchResult only consumes base-table columns (id, name, phone,
+        sex, date_of_birth, patient_type, status, facility_id, created_at) so
+        the subtype LEFT JOINs are unnecessary overhead.
+
+        More importantly, with_polymorphic exposes a data-integrity trap: if a
+        patients row exists whose patient_type discriminator points to a subtype
+        but the corresponding subtype row is missing (incomplete transaction,
+        failed migration, manual DB edit), the LEFT JOIN returns NULL for the
+        subtype PK.  In SQLAlchemy joined-table inheritance, the subtype PK
+        populates .id on the loaded instance — delivering id=None to the Pydantic
+        layer and causing a 500 on the entire listing.
+
+        Plain select(Patient) hits only the patients table.  patient.id is always
+        patients.id (the base PK), which is never NULL by definition.
         """
-        poly_patient = with_polymorphic(Patient, [PregnantPatient, RegularPatient])
-        base_query = select(poly_patient).where(poly_patient.is_deleted == False)
+        base_query = select(Patient).where(Patient.is_deleted == False)
 
         if facility_id:
-            base_query = base_query.where(poly_patient.facility_id == facility_id)
+            base_query = base_query.where(Patient.facility_id == facility_id)
         if patient_type:
-            base_query = base_query.where(poly_patient.patient_type == patient_type)
+            base_query = base_query.where(Patient.patient_type == patient_type)
         if patient_status:
-            base_query = base_query.where(poly_patient.status == patient_status)
+            base_query = base_query.where(Patient.status == patient_status)
 
-        base_query = base_query.order_by(poly_patient.created_at.desc())
+        base_query = base_query.order_by(Patient.created_at.desc())
 
         count_query = select(func.count()).select_from(base_query.subquery())
         total_result = await self.db.execute(count_query)
@@ -220,6 +252,7 @@ class PatientRepository:
             .where(
                 PregnantPatient.id == patient_id,
                 PregnantPatient.is_deleted == False,
+                PregnantPatient.patient_type == PatientType.PREGNANT,
             )
             .options(
                 selectinload(PregnantPatient.facility),
@@ -270,6 +303,7 @@ class PatientRepository:
             .where(
                 RegularPatient.id == patient_id,
                 RegularPatient.is_deleted == False,
+                RegularPatient.patient_type == PatientType.REGULAR,
             )
             .options(
                 selectinload(RegularPatient.facility),
@@ -530,6 +564,76 @@ class PatientRepository:
         query = query.order_by(PatientReminder.scheduled_date.desc())
         result = await self.db.execute(query)
         return list(result.scalars().all())
+
+    async def get_patient_reminders_paginated(
+        self,
+        patient_id: uuid.UUID,
+        pagination: PaginationParams,
+        status_filter: Optional[str] = None,
+        upcoming_only: bool = False,
+    ) -> PaginatedResponse:
+        """
+        Get paginated reminders for a patient with smart ordering.
+        
+        Ordering: Pending/upcoming first (by scheduled_date), then sent/cancelled.
+        
+        Args:
+            patient_id: Patient ID
+            pagination: Pagination parameters (page, page_size)
+            status_filter: Optional status filter (PENDING, SENT, FAILED, CANCELLED)
+            upcoming_only: If True, only show scheduled_date >= today
+        
+        Returns:
+            PaginatedResponse with items and page_info
+        """
+        from datetime import date
+        
+        # Build base query
+        query = select(PatientReminder).where(
+            PatientReminder.patient_id == patient_id
+        )
+        
+        # Filter by status if provided
+        if status_filter:
+            query = query.where(PatientReminder.status == status_filter)
+        
+        # Filter upcoming if requested
+        if upcoming_only:
+            query = query.where(PatientReminder.scheduled_date >= date.today())
+        
+        # Smart ordering: pending/upcoming first, then by date
+        # CASE WHEN status = 'PENDING' THEN 0 ELSE 1 END, scheduled_date
+        from sqlalchemy import case
+        priority_case = case(
+            (PatientReminder.status == ReminderStatus.PENDING, 0),
+            else_=1
+        )
+        query = query.order_by(priority_case, PatientReminder.scheduled_date)
+        
+        # Get total count
+        count_query = select(func.count()).select_from(query.subquery())
+        total_result = await self.db.execute(count_query)
+        total_count = total_result.scalar() or 0
+        
+        # Apply pagination
+        query = query.offset(pagination.skip).limit(pagination.limit)
+        result = await self.db.execute(query)
+        items = list(result.scalars().all())
+        
+        # Build page info
+        total_pages = (total_count + pagination.page_size - 1) // pagination.page_size
+        page_info = PageInfo(
+            total_items=total_count,
+            total_pages=total_pages,
+            current_page=pagination.page,
+            page_size=pagination.page_size,
+            has_next=pagination.page < total_pages,
+            has_previous=pagination.page > 1,
+            next_page=pagination.page + 1 if pagination.page < total_pages else None,
+            previous_page=pagination.page - 1 if pagination.page > 1 else None,
+        )
+        
+        return PaginatedResponse(items=items, page_info=page_info)
 
     async def update_reminder(self, reminder: PatientReminder) -> PatientReminder:
         self.db.add(reminder)

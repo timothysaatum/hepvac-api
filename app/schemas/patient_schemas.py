@@ -664,6 +664,29 @@ class RegularPatientResponseSchema(BaseModel):
         )
 
 
+
+
+# ============================================================================
+# Polymorphic Patient Response
+# ============================================================================
+
+# Used by GET /patients/{patient_id}. FastAPI/Pydantic can serialize either
+# response shape depending on the current patient_type discriminator.
+class PatientResponseSchema(BaseModel):
+    """
+    Stable polymorphic response wrapper for GET /patients/{patient_id}.
+
+    Frontend receives a consistent envelope:
+    {
+        "patient_type": "pregnant" | "regular",
+        "data": {...}
+    }
+    """
+
+    patient_type: PatientType
+    data: PregnantPatientResponseSchema | RegularPatientResponseSchema
+
+    model_config = {"from_attributes": True}
 # ============================================================================
 # Child
 # ============================================================================
@@ -822,53 +845,55 @@ class ReRegisterAsPregnantSchema(BaseModel):
 # Patient Search Result
 # ============================================================================
 
-
 class PatientSearchResult(BaseModel):
     """
-    Compact patient record returned by the search endpoint.
+    Compact patient record returned by the paginated patient list/search endpoint.
 
-    IMPORTANT — id must always come from patients.id (the base table PK).
-    Never populate this from the polymorphic join columns (pregnant_patients.id
-    or regular_patients.id); those columns are NULL when the patient lacks that
-    subtype row, which causes a Pydantic validation error.
-
-    The correct way to build this from an ORM result is:
-        PatientSearchResult.model_validate(patient)   # from_attributes=True reads patient.id
-    or:
-        PatientSearchResult(id=patient.id, ...)       # explicit — safest
-
-    Never do:
-        PatientSearchResult(**row._mapping)           # mapping has id_1/id_2 ambiguity
-        PatientSearchResult(id=row.id_1, ...)         # id_1 is None for regular-only patients
+    IMPORTANT:
+    This schema must only read columns from the base patients table.
+    Do not access gravida, para, pregnancies, or active_pregnancy here,
+    because those live in subtype tables/relationships and can trigger
+    MissingGreenlet in async SQLAlchemy.
     """
 
-    id:           uuid.UUID
-    name:         Optional[str]        = None
-    phone:        Optional[str]        = None
-    sex:          Sex
-    date_of_birth: Optional[date]      = None
-    patient_type: str
-    status:       PatientStatus
-    facility_id:  Optional[uuid.UUID]  = None
-    created_at:   datetime
+    id: uuid.UUID
+    name: Optional[str] = None
+    phone: Optional[str] = None
+    age: Optional[int] = None
+    sex: Optional[Sex] = None
+    date_of_birth: Optional[date] = None
+    patient_type: Optional[str] = None
+    status: Optional[PatientStatus] = None
+    facility_id: Optional[uuid.UUID] = None
+    created_at: Optional[datetime] = None
 
     model_config = {"from_attributes": True}
 
     @classmethod
     def from_patient(cls, patient: "Patient") -> "PatientSearchResult":
         """
-        Build a search result from any Patient ORM object (base, pregnant, or regular).
-
-        Explicitly reads patient.id — never touches the subtype join columns —
-        so this is safe to call after a with_polymorphic query.
+        Build compact response from the base Patient ORM object only.
         """
+
+        patient_id = patient.id
+        if patient_id is None:
+            raise ValueError(
+                "PatientSearchResult.from_patient: patient.id is None. "
+                "This indicates a corrupted patient ORM object."
+            )
+
         return cls(
-            id=patient.id,                      # always patients.id — never NULL
+            id=patient_id,
             name=patient.name,
             phone=patient.phone,
+            age=patient.age,
             sex=patient.sex,
             date_of_birth=patient.date_of_birth,
-            patient_type=patient.patient_type,
+            patient_type=(
+                patient.patient_type.value
+                if hasattr(patient.patient_type, "value")
+                else patient.patient_type
+            ),
             status=patient.status,
             facility_id=patient.facility_id,
             created_at=patient.created_at,

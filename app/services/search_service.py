@@ -78,7 +78,7 @@ class SearchService:
 
         # Convert to response models
         items = [self._patient_to_search_result(p) for p in patients]
-        print(items)
+
         # Calculate pagination info
         total_pages = math.ceil(total_count / page_size) if total_count > 0 else 0
         has_next = page < total_pages
@@ -95,25 +95,28 @@ class SearchService:
         )
 
     def _patient_to_search_result(self, patient: Patient) -> PatientSearchResult:
-        """Convert Patient model to PatientSearchResult."""
+        """Convert Patient model to PatientSearchResult.
+        
+        CRITICAL: Convert all enum values to strings/values for Pydantic serialization.
+        Passing raw enum objects causes corruption like "Man DbPregnant".
+        """
+        from app.schemas.patient_schemas import Sex, PatientStatus
+        
         result_dict = {
             "id": patient.id,
             "name": patient.name,
             "phone": patient.phone,
             "age": patient.age,
-            "sex": patient.sex,
-            "patient_type": patient.patient_type,
-            "status": patient.status,
+            "sex": patient.sex.value if isinstance(patient.sex, Sex) else patient.sex,
+            "patient_type": patient.patient_type.value if hasattr(patient.patient_type, "value") else patient.patient_type,
+            "status": patient.status.value if isinstance(patient.status, PatientStatus) else patient.status,
             "facility_id": patient.facility_id,
             "created_at": patient.created_at,
         }
 
-        # BUG FIX: compare against PatientType enum members, not plain strings.
-        # patient.patient_type is a PatientType enum; "pregnant" == PatientType.PREGNANT
-        # is always False, making both branches dead code with string comparisons.
+        # Compare against PatientType enum members correctly
         if patient.patient_type == PatientType.PREGNANT:
-            # BUG FIX: schema uses active_pregnancy: Optional[PregnancySummarySchema],
-            # not the old flat expected_delivery_date / actual_delivery_date keys.
+            # Schema uses active_pregnancy: Optional[PregnancySummarySchema]
             active = getattr(patient, "active_pregnancy", None)
             result_dict["active_pregnancy"] = (
                 PregnancySummarySchema.model_validate(active) if active else None

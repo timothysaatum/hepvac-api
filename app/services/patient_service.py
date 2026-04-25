@@ -127,13 +127,9 @@ class PatientService:
         """Get pregnant patient by ID."""
         patient = await self.repo.get_pregnant_patient_by_id(patient_id)
         if not patient:
-            # Distinguish converted vs never-existed so the frontend can redirect.
-            base = await self.repo.get_patient_by_id(patient_id)
-            if base:
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail="Patient has been converted to a regular patient.",
-                )
+            # If the base patient exists but is now regular, this endpoint is
+            # simply the wrong resource. The unified GET /patients/{id} endpoint
+            # should be used when the frontend does not know the current type.
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Pregnant patient not found.",
@@ -192,6 +188,8 @@ class PatientService:
         The old approach created a brand new UUID, permanently orphaning all
         related records. That approach has been replaced here.
         """
+        from app.core.utils import logger
+        
         pregnant_patient = await self.repo.get_pregnant_patient_by_id(patient_id)
         if not pregnant_patient:
             raise HTTPException(
@@ -222,6 +220,11 @@ class PatientService:
                     increment_para=increment,
                 )
             except ValueError as e:
+                logger.log_error({
+                    "event": "pregnancy_closure_failed",
+                    "patient_id": str(patient_id),
+                    "error": str(e)
+                })
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)
                 )
@@ -240,35 +243,51 @@ class PatientService:
             active_pregnancy.actual_delivery_date if active_pregnancy else None
         )
 
-        await self.db.execute(
-            _text("""
-                UPDATE patients
-                SET patient_type  = 'REGULAR',
-                    status        = 'POSTPARTUM',
-                    updated_by_id = :user_id
-                WHERE id = :patient_id
-            """),
-            {"user_id": str(user_id), "patient_id": str(patient_id)},
-        )
+        try:
+            await self.db.execute(
+                _text("""
+                    UPDATE patients
+                    SET patient_type  = 'REGULAR',
+                        status        = 'POSTPARTUM',
+                        updated_by_id = :user_id
+                    WHERE id = :patient_id
+                """),
+                {"user_id": str(user_id), "patient_id": str(patient_id)},
+            )
 
-        await self.db.execute(
-            _text("""
-                INSERT INTO regular_patients
-                    (id, diagnosis_date, treatment_start_date, treatment_regimen, notes)
-                VALUES
-                    (:id, :diagnosis_date, :treatment_start_date, :treatment_regimen, :notes)
-                ON CONFLICT (id) DO NOTHING
-            """),
-            {
-                "id":                   str(patient_id),
-                "diagnosis_date":       delivery_date,
-                "treatment_start_date": delivery_date,
-                "treatment_regimen":    conversion_data.treatment_regimen,
-                "notes":                conversion_data.notes,
-            },
-        )
+            await self.db.execute(
+                _text("""
+                    INSERT INTO regular_patients
+                        (id, diagnosis_date, treatment_start_date, treatment_regimen, notes)
+                    VALUES
+                        (:id, :diagnosis_date, :treatment_start_date, :treatment_regimen, :notes)
+                    ON CONFLICT (id) DO UPDATE SET
+                        diagnosis_date = COALESCE(EXCLUDED.diagnosis_date, regular_patients.diagnosis_date),
+                        treatment_start_date = COALESCE(EXCLUDED.treatment_start_date, regular_patients.treatment_start_date),
+                        treatment_regimen = COALESCE(EXCLUDED.treatment_regimen, regular_patients.treatment_regimen),
+                        notes = COALESCE(EXCLUDED.notes, regular_patients.notes)
+                """),
+                {
+                    "id":                   str(patient_id),
+                    "diagnosis_date":       delivery_date,
+                    "treatment_start_date": delivery_date,
+                    "treatment_regimen":    conversion_data.treatment_regimen,
+                    "notes":                conversion_data.notes,
+                },
+            )
 
-        await self.db.commit()
+            await self.db.commit()
+        except Exception as e:
+            await self.db.rollback()
+            logger.log_error({
+                "event": "conversion_transaction_failed",
+                "patient_id": str(patient_id),
+                "error": str(e)
+            }, exc_info=True)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Conversion transaction failed. Please try again.",
+            )
 
         # FIX: expunge_all() instead of expire_all().
         # expire_all() only marks attributes stale — it does NOT remove the
@@ -292,11 +311,24 @@ class PatientService:
             )
         )
         regular_patient = result.scalars().first()
+        
         if not regular_patient:
+            logger.log_error({
+                "event": "conversion_verification_failed",
+                "patient_id": str(patient_id),
+                "detail": "Could not reload RegularPatient after conversion"
+            })
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Conversion succeeded but patient could not be reloaded.",
             )
+        
+        logger.log_info({
+            "event": "patient_converted_to_regular",
+            "patient_id": str(patient_id),
+            "converted_by": str(user_id),
+        })
+        
         return regular_patient
 
     # =========================================================================
@@ -369,6 +401,16 @@ class PatientService:
             setattr(patient, field, value)
 
         return await self.repo.update_regular_patient(updated_by_id, patient)
+
+    async def get_patient(self, patient_id: uuid.UUID):
+        """Get a patient by ID, automatically returning the current subtype."""
+        patient = await self.repo.get_patient_by_id(patient_id)
+        if not patient:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Patient not found.",
+            )
+        return patient
 
     # =========================================================================
     # Common patient
@@ -917,6 +959,26 @@ class PatientService:
             )
         return await self.repo.get_patient_reminders(patient_id, pending_only)
 
+    async def list_patient_reminders_paginated(
+        self,
+        patient_id: uuid.UUID,
+        pagination,  # PaginationParams
+        status_filter: Optional[str] = None,
+        upcoming_only: bool = False,
+    ):
+        """Get paginated reminders with smart filtering and ordering."""
+        patient = await self.repo.get_patient_by_id(patient_id)
+        if not patient:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Patient not found."
+            )
+        return await self.repo.get_patient_reminders_paginated(
+            patient_id=patient_id,
+            pagination=pagination,
+            status_filter=status_filter,
+            upcoming_only=upcoming_only,
+        )
+
     # =========================================================================
     # Diagnosis
     # =========================================================================
@@ -1000,6 +1062,7 @@ class PatientService:
           5. Commit. No INSERT into pregnant_patients needed.
         """
         from sqlalchemy import text as _text, select as _select
+        from app.core.utils import logger
 
         # FIX: expunge_all() instead of expire_all().
         # expire_all() only marks attributes stale — it does NOT evict objects
@@ -1023,7 +1086,7 @@ class PatientService:
                 detail="Regular patient not found.",
             )
 
-        # Flip discriminator back to PREGNANT.
+        # Step 1: Flip discriminator back to PREGNANT.
         await self.db.execute(
             _text("""
                 UPDATE patients
@@ -1062,16 +1125,66 @@ class PatientService:
             )
         )
         pregnant_patient = result.scalars().first()
+        
+        # CRITICAL FIX: If pregnant_patients row is missing, create it now.
+        # This can happen if the initial conversion had data inconsistencies.
         if not pregnant_patient:
+            logger.log_warning({
+                "event": "pregnant_patients_row_missing_during_reregistration",
+                "patient_id": str(patient_id),
+                "detail": "Creating missing pregnant_patients row"
+            })
+            
+            # Create the missing subtype row with default/inherited values
+            await self.db.execute(
+                _text("""
+                    INSERT INTO pregnant_patients
+                        (id, gravida, para)
+                    VALUES
+                        (:id, 1, :para)
+                    ON CONFLICT (id) DO NOTHING
+                """),
+                {
+                    "id": str(patient_id),
+                    "para": regular.para if hasattr(regular, "para") else 0,
+                },
+            )
+            await self.db.commit()
+            self.db.expunge_all()
+            
+            # Retry load
+            result = await self.db.execute(
+                _select(PregnantPatient)
+                .where(PregnantPatient.id == patient_id)
+                .options(
+                    _sil(PregnantPatient.facility),
+                    _sil(PregnantPatient.created_by),
+                    _sil(PregnantPatient.updated_by),
+                    _sil(PregnantPatient.pregnancies),
+                )
+            )
+            pregnant_patient = result.scalars().first()
+        
+        if not pregnant_patient:
+            logger.log_error({
+                "event": "re_register_pregnant_fatal_error",
+                "patient_id": str(patient_id),
+                "detail": "Still could not load PregnantPatient after row creation"
+            })
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Re-registration failed: pregnant_patients row missing.",
+                detail="Re-registration failed: unable to load patient data.",
             )
 
-        # Open the new episode via the model's business logic.
+        # Step 3: Open the new episode via the model's business logic.
         try:
             pregnancy = pregnant_patient.open_new_pregnancy()
         except ValueError as e:
+            logger.log_warning({
+                "event": "pregnancy_creation_failed",
+                "patient_id": str(patient_id),
+                "error": str(e)
+            })
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)
             )
@@ -1091,6 +1204,12 @@ class PatientService:
         pregnant_patient.updated_by_id = user_id
         self.db.add(pregnant_patient)
         await self.db.commit()
+
+        logger.log_info({
+            "event": "pregnancy_episode_opened",
+            "patient_id": str(patient_id),
+            "gravida": pregnant_patient.gravida,
+        })
 
         # After commit, do a final SELECT with all eager loads so the response
         # schema can access facility/created_by/updated_by/pregnancies without
