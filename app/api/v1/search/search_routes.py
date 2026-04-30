@@ -94,7 +94,7 @@ async def search_patients(
     
     Returns paginated list of patients matching the search criteria.
     """
-    service = SearchService(db)
+    service = SearchService(db, current_user)
     start_time = time.time()
     
     try:
@@ -210,7 +210,7 @@ async def search_vaccinations(
     
     **SECURITY**: Rate limited, input sanitized, max page size 50
     """
-    service = SearchService(db)
+    service = SearchService(db, current_user)
     start_time = time.time()
     
     try:
@@ -312,7 +312,7 @@ async def search_payments(
     **SECURITY**: Rate limited, input sanitized, max page size 50
     **INCLUDES**: Total amount for all filtered payments
     """
-    service = SearchService(db)
+    service = SearchService(db, current_user)
     start_time = time.time()
     
     try:

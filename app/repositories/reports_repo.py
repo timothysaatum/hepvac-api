@@ -84,19 +84,10 @@ class ReportRepo:
                 f.facility_name,
                 -- pregnant-specific
                 pp.gravida,
-                pp.para,
-                -- regular-specific
-                rp.diagnosis_date,
-                rp.treatment_start_date,
-                rp.treatment_regimen,
-                rp.viral_load,
-                rp.last_viral_load_date,
-                rp.medical_history,
-                rp.allergies
+                pp.para
             FROM patients p
             LEFT JOIN facilities f          ON f.id  = p.facility_id
             LEFT JOIN pregnant_patients pp  ON pp.id = p.id
-            LEFT JOIN regular_patients  rp  ON rp.id = p.id
             WHERE {where}
             ORDER BY p.created_at
         """)

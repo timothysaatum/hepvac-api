@@ -45,12 +45,15 @@ from .patient_model import (
     PregnantPatient,
     RegularPatient,
     Diagnosis,
+    PatientIdentifier,
+    PatientAllergy,
     Vaccination,
     Child,
     Payment,
     Prescription,
     MedicationSchedule,
     PatientReminder,
+    FacilityNotification,
 )
 
 from app.core.settings import Setting

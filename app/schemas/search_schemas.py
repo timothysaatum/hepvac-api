@@ -101,11 +101,6 @@ class PatientSearchResult(BaseModel):
     # None for regular patients or pregnant patients with no active pregnancy.
     active_pregnancy: Optional[PregnancySummarySchema] = None
 
-    # Regular-patient fields — None for pregnant patients.
-    diagnosis_date:      Optional[date] = None
-    treatment_start_date: Optional[date] = None
-    viral_load:          Optional[str]  = None
-
     model_config = {"from_attributes": True}
 
 

@@ -24,6 +24,8 @@ from app.schemas.patient_schemas import (
     ConvertToRegularPatientSchema,
     PatientResponseSchema,
     PatientSearchResult,
+    PatientAllergySchema,
+    PatientAllergyUpdateSchema,
     ReRegisterAsPregnantSchema,
     PatientType,
     PregnancyCloseSchema,
@@ -63,7 +65,7 @@ async def create_pregnant_patient(
     `facility_id` and `created_by_id` are set automatically from the
     authenticated user — do not include them in the request body.
     """
-    service = PatientService(db)
+    service = PatientService(db, current_user)
     try:
         patient_data.facility_id = current_user.facility_id
         patient_data.created_by_id = current_user.id
@@ -113,7 +115,7 @@ async def get_pregnant_patient(
     current_user: User = Depends(require_staff_or_admin()),
 ):
     """Get a pregnant patient by ID."""
-    service = PatientService(db)
+    service = PatientService(db, current_user)
     try:
         patient = await service.get_pregnant_patient(patient_id)
         return PregnantPatientResponseSchema.from_patient(patient)
@@ -147,7 +149,7 @@ async def update_pregnant_patient(
     To update pregnancy clinical data (dates, gestational age, risk factors)
     use PATCH /pregnancies/{pregnancy_id} instead.
     """
-    service = PatientService(db)
+    service = PatientService(db, current_user)
     try:
         patient = await service.update_pregnant_patient(
             current_user.id, patient_id, update_data
@@ -196,7 +198,7 @@ async def convert_to_regular_patient(
     Closes the active pregnancy with the provided outcome, then transitions
     the patient into the long-term HIV treatment pathway.
     """
-    service = PatientService(db)
+    service = PatientService(db, current_user)
     user_id = current_user.id
     try:
         patient = await service.convert_to_regular_patient(
@@ -248,7 +250,7 @@ async def open_pregnancy(
     Used when a patient who has previously delivered becomes pregnant again.
     Returns 400 if she already has an active pregnancy.
     """
-    service = PatientService(db)
+    service = PatientService(db, current_user)
     try:
         pregnancy_data.patient_id = patient_id
         pregnancy = await service.open_pregnancy(
@@ -290,7 +292,7 @@ async def list_patient_pregnancies(
     current_user: User = Depends(require_staff_or_admin()),
 ):
     """List all pregnancy episodes for a patient, ordered chronologically."""
-    service = PatientService(db)
+    service = PatientService(db, current_user)
     try:
         pregnancies = await service.list_patient_pregnancies(patient_id)
         return [PregnancyResponseSchema.model_validate(p) for p in pregnancies]
@@ -318,7 +320,7 @@ async def get_pregnancy(
     current_user: User = Depends(require_staff_or_admin()),
 ):
     """Get a single pregnancy episode by ID."""
-    service = PatientService(db)
+    service = PatientService(db, current_user)
     try:
         pregnancy = await service.get_pregnancy(pregnancy_id)
         return PregnancyResponseSchema.model_validate(pregnancy)
@@ -351,7 +353,7 @@ async def update_pregnancy(
 
     Returns 400 if the pregnancy is already closed.
     """
-    service = PatientService(db)
+    service = PatientService(db, current_user)
     try:
         pregnancy = await service.update_pregnancy(pregnancy_id, update_data)
 
@@ -393,7 +395,7 @@ async def close_pregnancy(
     and delivery date. Increments `para` on the patient when appropriate.
     Returns 400 if the pregnancy is already closed.
     """
-    service = PatientService(db)
+    service = PatientService(db, current_user)
     try:
         pregnancy = await service.close_pregnancy(
             pregnancy_id, close_data, current_user.id
@@ -444,7 +446,7 @@ async def create_regular_patient(
     `facility_id` and `created_by_id` are set automatically from the
     authenticated user.
     """
-    service = PatientService(db)
+    service = PatientService(db, current_user)
     try:
         patient_data.facility_id = current_user.facility_id
         patient_data.created_by_id = current_user.id
@@ -493,7 +495,7 @@ async def get_regular_patient(
     current_user: User = Depends(require_staff_or_admin()),
 ):
     """Get a regular patient by ID."""
-    service = PatientService(db)
+    service = PatientService(db, current_user)
     try:
         patient = await service.get_regular_patient(patient_id)
         # FIX: original incorrectly returned PregnantPatientResponseSchema here.
@@ -523,7 +525,7 @@ async def update_regular_patient(
     current_user: User = Depends(require_staff_or_admin()),
 ):
     """Update a regular patient."""
-    service = PatientService(db)
+    service = PatientService(db, current_user)
     try:
         patient = await service.update_regular_patient(
             current_user.id, patient_id, update_data
@@ -555,6 +557,67 @@ async def update_regular_patient(
             detail="An error occurred while updating the patient.",
         )
 
+
+@router.get(
+    "/{patient_id}/allergies",
+    response_model=list[PatientAllergySchema],
+)
+async def list_patient_allergies(
+    patient_id: uuid.UUID,
+    active_only: bool = False,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_staff_or_admin()),
+):
+    """List structured allergy/intolerance records for a patient."""
+    service = PatientService(db, current_user)
+    return [
+        PatientAllergySchema.model_validate(a)
+        for a in await service.list_patient_allergies(patient_id, active_only)
+    ]
+
+
+@router.post(
+    "/{patient_id}/allergies",
+    response_model=PatientAllergySchema,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_patient_allergy(
+    patient_id: uuid.UUID,
+    allergy_data: PatientAllergySchema,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_staff_or_admin()),
+):
+    """Record a structured allergy/intolerance for a patient."""
+    service = PatientService(db, current_user)
+    try:
+        allergy = await service.create_patient_allergy(
+            patient_id=patient_id,
+            allergy_data=allergy_data,
+            recorded_by_id=current_user.id,
+        )
+        return PatientAllergySchema.model_validate(allergy)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+@router.patch(
+    "/allergies/{allergy_id}",
+    response_model=PatientAllergySchema,
+)
+async def update_patient_allergy(
+    allergy_id: uuid.UUID,
+    update_data: PatientAllergyUpdateSchema,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_staff_or_admin()),
+):
+    """Update or deactivate a structured allergy/intolerance record."""
+    service = PatientService(db, current_user)
+    try:
+        allergy = await service.update_patient_allergy(allergy_id, update_data)
+        return PatientAllergySchema.model_validate(allergy)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
 @router.get(
     "/{patient_id}",
     response_model=PatientResponseSchema,
@@ -565,7 +628,7 @@ async def get_patient(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_staff_or_admin()),
 ):
-    service = PatientService(db)
+    service = PatientService(db, current_user)
 
     try:
         patient = await service.get_patient(patient_id)
@@ -620,7 +683,7 @@ async def update_patient(
     Automatically detects patient type and routes to appropriate service method.
     For pregnancy clinical data updates, use PATCH /pregnancies/{pregnancy_id} instead.
     """
-    service = PatientService(db)
+    service = PatientService(db, current_user)
 
     try:
         # Get patient to determine type
@@ -705,7 +768,7 @@ async def list_patients(
 ):
     """Paginated compact list of patients with optional filters."""
     try:
-        patient_service = PatientService(db)
+        patient_service = PatientService(db, current_user)
 
         patients, total_count = await patient_service.list_patients_paginated(
             facility_id=facility_id,
@@ -714,7 +777,6 @@ async def list_patients(
             page=pagination.page,
             page_size=pagination.page_size,
         )
-        print(f"=============================Patients count: {len(patients)}")
         validated_items: list[PatientSearchResult] = []
         skipped_count = 0
         for i, patient in enumerate(patients):
@@ -724,7 +786,6 @@ async def list_patients(
                 # A single patient failing serialization (e.g. data-integrity gap:
                 # missing subtype row) must not 500 the entire listing.
                 # Log it prominently so it shows up in monitoring, then continue.
-                print(f"==============================={exc}============")
                 skipped_count += 1
                 logger.log_error({
                     "event":        "patient_serialization_skipped",
@@ -821,7 +882,7 @@ async def re_register_as_pregnant(
     - Proper transaction rollback on failure
     - Detailed error messages for debugging
     """
-    service = PatientService(db)
+    service = PatientService(db, current_user)
     user_id = current_user.id
     try:
         patient = await service.re_register_as_pregnant(
@@ -873,7 +934,7 @@ async def delete_patient(
     current_user: User = Depends(require_staff_or_admin()),
 ):
     """Soft delete a patient."""
-    service = PatientService(db)
+    service = PatientService(db, current_user)
     try:
         await service.delete_patient(patient_id)
 

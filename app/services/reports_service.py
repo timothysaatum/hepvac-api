@@ -148,8 +148,6 @@ def _build_patients(ws: Worksheet, rows, filters: ReportFilters) -> int:
         "Patient ID", "Name", "Phone", "Sex", "Date of Birth", "Age",
         "Type", "Status", "Facility", "Registered On", "Accepts Messaging",
         "Gravida", "Para",
-        "Diagnosis Date", "Treatment Start", "Treatment Regimen",
-        "Viral Load", "Last VL Date", "Medical History", "Allergies",
     ]
     _write_header(ws, cols, row=data_row)
     data_row += 1
@@ -168,8 +166,6 @@ def _build_patients(ws: Worksheet, rows, filters: ReportFilters) -> int:
             r.patient_type, r.patient_status, r.facility_name,
             r.created_at, r.accepts_messaging,
             r.gravida, r.para,
-            r.diagnosis_date, r.treatment_start_date, r.treatment_regimen,
-            r.viral_load, r.last_viral_load_date, r.medical_history, r.allergies,
         ], row=data_row, alt=(i % 2 == 1))
         data_row += 1
 

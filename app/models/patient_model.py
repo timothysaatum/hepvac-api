@@ -10,7 +10,7 @@ Schema (joined-table inheritance):
 
 Supporting models:
     Diagnosis, Vaccination, Child, Payment,
-    Prescription, MedicationSchedule, PatientReminder
+    Prescription, MedicationSchedule, PatientReminder, FacilityNotification
 
 
 Data model:
@@ -21,6 +21,7 @@ Data model:
 """
 
 import uuid
+import re
 from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import TYPE_CHECKING, List, Optional
@@ -40,7 +41,7 @@ from sqlalchemy import (
     func,
 )
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column, relationship, validates
 
 from app.db.base import Base
 from app.schemas.patient_schemas import (
@@ -83,6 +84,18 @@ class Patient(Base):
 
     __tablename__ = "patients"
 
+    __table_args__ = (
+        CheckConstraint(
+            "date_of_birth IS NULL OR date_of_birth <= CURRENT_DATE",
+            name="ck_patient_dob_not_future",
+        ),
+        CheckConstraint(
+            "(is_deleted = FALSE AND deleted_at IS NULL) OR "
+            "(is_deleted = TRUE AND deleted_at IS NOT NULL)",
+            name="ck_patient_deleted_timestamp_consistent",
+        ),
+    )
+
     id: Mapped[uuid.UUID] = mapped_column(
         PGUUID(as_uuid=True),
         primary_key=True,
@@ -92,11 +105,30 @@ class Patient(Base):
 
     # ── Demographics ──────────────────────────────────────────────────────────
     name: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    first_name: Mapped[Optional[str]] = mapped_column(String(100), nullable=True, index=True)
+    last_name: Mapped[Optional[str]] = mapped_column(String(100), nullable=True, index=True)
+    preferred_name: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    medical_record_number: Mapped[Optional[str]] = mapped_column(
+        String(64),
+        nullable=True,
+        index=True,
+    )
     phone: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
     sex: Mapped[Sex] = mapped_column(sex_enum_type, nullable=False)
 
     # Age is a computed @property derived from this — never store raw age integers.
     date_of_birth: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+
+    # ── Contact / location ────────────────────────────────────────────────────
+    address_line: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    city: Mapped[Optional[str]] = mapped_column(String(100), nullable=True, index=True)
+    district: Mapped[Optional[str]] = mapped_column(String(100), nullable=True, index=True)
+    region: Mapped[Optional[str]] = mapped_column(String(100), nullable=True, index=True)
+    country: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+
+    emergency_contact_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    emergency_contact_phone: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    emergency_contact_relationship: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
 
     # ── Polymorphic discriminator ─────────────────────────────────────────────
     patient_type: Mapped[PatientType] = mapped_column(
@@ -226,6 +258,18 @@ class Patient(Base):
         cascade="all, delete-orphan",
         lazy="noload",
     )
+    identifiers: Mapped[List["PatientIdentifier"]] = relationship(
+        "PatientIdentifier",
+        back_populates="patient",
+        cascade="all, delete-orphan",
+        lazy="noload",
+    )
+    allergies_structured: Mapped[List["PatientAllergy"]] = relationship(
+        "PatientAllergy",
+        back_populates="patient",
+        cascade="all, delete-orphan",
+        lazy="noload",
+    )
 
     # ── Computed properties ───────────────────────────────────────────────────
 
@@ -244,6 +288,65 @@ class Patient(Base):
         if (today.month, today.day) < (self.date_of_birth.month, self.date_of_birth.day):
             years -= 1
         return years
+
+    @validates("name")
+    def validate_name(self, key: str, value: str) -> str:
+        """Normalize and validate names before persistence."""
+        if value is None or not str(value).strip():
+            raise ValueError("Patient name is required.")
+        value = str(value).strip()
+        if not (2 <= len(value) <= 255):
+            raise ValueError("Patient name must be between 2 and 255 characters.")
+        return value
+
+    @validates("first_name", "last_name", "preferred_name", "emergency_contact_name")
+    def validate_short_name(self, key: str, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return value
+        value = value.strip()
+        if not value:
+            return None
+        if len(value) > 100 and key != "emergency_contact_name":
+            raise ValueError(f"{key} must not exceed 100 characters.")
+        if len(value) > 255:
+            raise ValueError(f"{key} must not exceed 255 characters.")
+        return value
+
+    @validates("medical_record_number")
+    def validate_medical_record_number(self, key: str, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return value
+        value = value.strip().upper()
+        if not value:
+            return None
+        if not re.match(r"^[A-Z0-9][A-Z0-9\-_/]{1,63}$", value):
+            raise ValueError("Medical record number contains invalid characters.")
+        return value
+
+    @validates("phone")
+    def validate_phone(self, key: str, value: str) -> str:
+        """
+        Normalize patient phone numbers to +<digits>.
+
+        This gives duplicate checks and unique indexes a canonical value,
+        so local formatting differences do not create separate patient rows.
+        """
+        if value is None or not str(value).strip():
+            raise ValueError("Patient phone number is required.")
+
+        digits = re.sub(r"\D", "", str(value))
+        if not (10 <= len(digits) <= 15):
+            raise ValueError("Phone number must contain 10 to 15 digits.")
+        return f"+233 {digits}"
+
+    @validates("emergency_contact_phone")
+    def validate_emergency_contact_phone(self, key: str, value: Optional[str]) -> Optional[str]:
+        if value is None or not str(value).strip():
+            return None
+        digits = re.sub(r"\D", "", str(value))
+        if not (10 <= len(digits) <= 15):
+            raise ValueError("Emergency contact phone must contain 10 to 15 digits.")
+        return f"+233 {digits}"
 
     def __repr__(self) -> str:
         return f"<Patient id={self.id} name={self.name} type={self.patient_type}>"
@@ -320,6 +423,144 @@ class Diagnosis(Base):
 
 
 # ============================================================================
+# PatientIdentifier
+# ============================================================================
+
+
+class PatientIdentifier(Base):
+    """External or program-specific identifier assigned to a patient."""
+
+    __tablename__ = "patient_identifiers"
+
+    __table_args__ = (
+        UniqueConstraint(
+            "facility_id",
+            "identifier_type",
+            "identifier_value",
+            name="uq_patient_identifier_facility_type_value",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+        index=True,
+    )
+    patient_id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("patients.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    facility_id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("facilities.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+    identifier_type: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
+    identifier_value: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    issuer: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    is_primary: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+
+    patient: Mapped["Patient"] = relationship(
+        "Patient",
+        back_populates="identifiers",
+        lazy="noload",
+    )
+
+    @validates("identifier_type", "identifier_value", "issuer")
+    def validate_identifier_text(self, key: str, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return value
+        value = value.strip()
+        if not value:
+            if key == "issuer":
+                return None
+            raise ValueError(f"{key} is required.")
+        return value.upper() if key != "issuer" else value
+
+
+# ============================================================================
+# PatientAllergy
+# ============================================================================
+
+
+class PatientAllergy(Base):
+    """Structured allergy/intolerance record linked to a patient."""
+
+    __tablename__ = "patient_allergies"
+
+    __table_args__ = (
+        UniqueConstraint(
+            "patient_id",
+            "allergen",
+            name="uq_patient_allergy_allergen",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+        index=True,
+    )
+    patient_id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("patients.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    allergen: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    reaction: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    severity: Mapped[Optional[str]] = mapped_column(String(30), nullable=True, index=True)
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    recorded_by_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    recorded_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False, index=True)
+
+    patient: Mapped["Patient"] = relationship(
+        "Patient",
+        back_populates="allergies_structured",
+        lazy="noload",
+    )
+    recorded_by: Mapped[Optional["User"]] = relationship(
+        "User",
+        foreign_keys=[recorded_by_id],
+        lazy="selectin",
+    )
+
+    @validates("allergen", "reaction", "severity")
+    def validate_allergy_text(self, key: str, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return value
+        value = value.strip()
+        if not value:
+            if key == "allergen":
+                raise ValueError("Allergen is required.")
+            return None
+        if key == "severity":
+            value = value.lower()
+            if value not in {"mild", "moderate", "severe", "life_threatening", "unknown"}:
+                raise ValueError("Invalid allergy severity.")
+        return value
+
+
+# ============================================================================
 # Pregnancy
 # ============================================================================
 
@@ -362,6 +603,30 @@ class Pregnancy(Base):
         ),
         # Pregnancy number must be a positive integer.
         CheckConstraint("pregnancy_number > 0", name="ck_pregnancy_number_positive"),
+        CheckConstraint(
+            "gestational_age_weeks IS NULL OR "
+            "(gestational_age_weeks >= 0 AND gestational_age_weeks <= 45)",
+            name="ck_pregnancy_gestational_age_range",
+        ),
+        CheckConstraint(
+            "lmp_date IS NULL OR lmp_date <= CURRENT_DATE",
+            name="ck_pregnancy_lmp_not_future",
+        ),
+        CheckConstraint(
+            "expected_delivery_date IS NULL OR lmp_date IS NULL OR "
+            "expected_delivery_date >= lmp_date",
+            name="ck_pregnancy_edd_after_lmp",
+        ),
+        CheckConstraint(
+            "actual_delivery_date IS NULL OR lmp_date IS NULL OR "
+            "actual_delivery_date >= lmp_date",
+            name="ck_pregnancy_delivery_after_lmp",
+        ),
+        CheckConstraint(
+            "(is_active = TRUE AND outcome IS NULL AND actual_delivery_date IS NULL) OR "
+            "(is_active = FALSE AND outcome IS NOT NULL AND actual_delivery_date IS NOT NULL)",
+            name="ck_pregnancy_closed_state_consistent",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -519,6 +784,12 @@ class PregnantPatient(Patient):
     )
     para: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
+    __table_args__ = (
+        CheckConstraint("gravida >= 0", name="ck_pregnant_gravida_non_negative"),
+        CheckConstraint("para >= 0", name="ck_pregnant_para_non_negative"),
+        CheckConstraint("para <= gravida", name="ck_pregnant_para_not_gt_gravida"),
+    )
+
     __mapper_args__ = {
         "polymorphic_identity": "pregnant",
     }
@@ -656,7 +927,10 @@ class RegularPatient(Patient):
     """
     Regular (non-pregnant) patient subtype.
 
-    Extends Patient with HIV/chronic-condition treatment fields.
+    This table is intentionally narrow. Clinical facts such as diagnoses,
+    prescriptions, medication schedules, allergies, notes, and lab results
+    live in their own patient-linked clinical resources instead of being
+    embedded on the patient identity record.
     """
 
     __tablename__ = "regular_patients"
@@ -666,15 +940,6 @@ class RegularPatient(Patient):
         ForeignKey("patients.id", ondelete="CASCADE"),
         primary_key=True,
     )
-
-    diagnosis_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
-    viral_load: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
-    last_viral_load_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
-    treatment_start_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
-    treatment_regimen: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    medical_history: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    allergies: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     __mapper_args__ = {
         "polymorphic_identity": "regular",
@@ -783,6 +1048,17 @@ class Child(Base):
 
     __tablename__ = "children"
 
+    __table_args__ = (
+        CheckConstraint(
+            "date_of_birth <= CURRENT_DATE",
+            name="ck_child_dob_not_future",
+        ),
+        CheckConstraint(
+            "test_date IS NULL OR test_date <= CURRENT_DATE",
+            name="ck_child_test_date_not_future",
+        ),
+    )
+
     id: Mapped[uuid.UUID] = mapped_column(
         PGUUID(as_uuid=True),
         primary_key=True,
@@ -872,6 +1148,14 @@ class Payment(Base):
 
     __tablename__ = "payments"
 
+    __table_args__ = (
+        CheckConstraint("amount > 0", name="ck_payment_amount_positive"),
+        CheckConstraint(
+            "payment_date <= CURRENT_DATE",
+            name="ck_payment_date_not_future",
+        ),
+    )
+
     id: Mapped[uuid.UUID] = mapped_column(
         PGUUID(as_uuid=True),
         primary_key=True,
@@ -942,6 +1226,14 @@ class Prescription(Base):
     """Medication prescription issued to a patient."""
 
     __tablename__ = "prescriptions"
+
+    __table_args__ = (
+        CheckConstraint("duration_months > 0", name="ck_prescription_duration_positive"),
+        CheckConstraint(
+            "end_date IS NULL OR end_date >= start_date",
+            name="ck_prescription_end_after_start",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         PGUUID(as_uuid=True),
@@ -1188,3 +1480,77 @@ class PatientReminder(Base):
             f"<PatientReminder id={self.id} type={self.reminder_type} "
             f"status={self.status}>"
         )
+
+
+# ============================================================================
+# FacilityNotification
+# ============================================================================
+
+
+class FacilityNotification(Base):
+    """Facility-facing work item generated from patient reminders."""
+
+    __tablename__ = "facility_notifications"
+
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('unread', 'acknowledged', 'in_progress', 'resolved', 'dismissed')",
+            name="ck_facility_notification_status",
+        ),
+        CheckConstraint(
+            "priority IN ('low', 'normal', 'high', 'urgent')",
+            name="ck_facility_notification_priority",
+        ),
+        UniqueConstraint(
+            "reminder_id",
+            name="uq_facility_notification_reminder",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+        index=True,
+    )
+    facility_id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("facilities.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    patient_id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("patients.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    reminder_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("patient_reminders.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    title: Mapped[str] = mapped_column(String(180), nullable=False)
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    notification_type: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
+    priority: Mapped[str] = mapped_column(String(20), nullable=False, default="normal", index=True)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="unread", index=True)
+    action_label: Mapped[Optional[str]] = mapped_column(String(80), nullable=True)
+    action_url: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    due_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True, index=True)
+    patient_phone: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), server_default=func.now(), nullable=False
+    )
+    acknowledged_at: Mapped[Optional[datetime]] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
+    resolved_at: Mapped[Optional[datetime]] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
+    assigned_to_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
+    patient: Mapped["Patient"] = relationship("Patient", lazy="selectin")
+    reminder: Mapped[Optional["PatientReminder"]] = relationship("PatientReminder", lazy="selectin")
+    assigned_to: Mapped[Optional["User"]] = relationship("User", foreign_keys=[assigned_to_id], lazy="selectin")

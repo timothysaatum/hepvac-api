@@ -8,7 +8,7 @@ import uuid
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
-from sqlalchemy import func
+from sqlalchemy import case, func
 from sqlalchemy.orm import selectinload
 
 from app.schemas.patient_schemas import PatientType, ReminderStatus
@@ -24,6 +24,9 @@ from app.models.patient_model import (
     Prescription,
     MedicationSchedule,
     PatientReminder,
+    FacilityNotification,
+    PatientIdentifier,
+    PatientAllergy,
 )
 
 
@@ -80,6 +83,65 @@ class PatientRepository:
             )
         )
         return result.scalars().first()
+
+    async def get_patient_facility_id(
+        self,
+        patient_id: uuid.UUID,
+    ) -> Optional[uuid.UUID]:
+        """Return a patient's facility id without loading PHI-heavy objects."""
+        result = await self.db.execute(
+            select(Patient.facility_id).where(
+                Patient.id == patient_id,
+                Patient.is_deleted == False,
+            )
+        )
+        return result.scalar_one_or_none()
+
+    async def get_pregnancy_facility_id(
+        self,
+        pregnancy_id: uuid.UUID,
+    ) -> Optional[uuid.UUID]:
+        result = await self.db.execute(
+            select(Patient.facility_id)
+            .join(PregnantPatient, PregnantPatient.id == Patient.id)
+            .join(Pregnancy, Pregnancy.patient_id == PregnantPatient.id)
+            .where(
+                Pregnancy.id == pregnancy_id,
+                Patient.is_deleted == False,
+            )
+        )
+        return result.scalar_one_or_none()
+
+    async def get_child_facility_id(
+        self,
+        child_id: uuid.UUID,
+    ) -> Optional[uuid.UUID]:
+        result = await self.db.execute(
+            select(Patient.facility_id)
+            .join(PregnantPatient, PregnantPatient.id == Patient.id)
+            .join(Pregnancy, Pregnancy.patient_id == PregnantPatient.id)
+            .join(Child, Child.pregnancy_id == Pregnancy.id)
+            .where(
+                Child.id == child_id,
+                Patient.is_deleted == False,
+            )
+        )
+        return result.scalar_one_or_none()
+
+    async def get_diagnosis_facility_id(
+        self,
+        diagnosis_id: uuid.UUID,
+    ) -> Optional[uuid.UUID]:
+        result = await self.db.execute(
+            select(Patient.facility_id)
+            .join(Diagnosis, Diagnosis.patient_id == Patient.id)
+            .where(
+                Diagnosis.id == diagnosis_id,
+                Diagnosis.is_deleted == False,
+                Patient.is_deleted == False,
+            )
+        )
+        return result.scalar_one_or_none()
 
     async def get_patient_by_pregnancy_id(
         self, pregnancy_id: uuid.UUID
@@ -259,6 +321,8 @@ class PatientRepository:
                 selectinload(PregnantPatient.created_by),
                 selectinload(PregnantPatient.updated_by),
                 selectinload(PregnantPatient.pregnancies),
+                selectinload(PregnantPatient.identifiers),
+                selectinload(PregnantPatient.allergies_structured),
             )
         )
         return result.scalars().first()
@@ -309,6 +373,8 @@ class PatientRepository:
                 selectinload(RegularPatient.facility),
                 selectinload(RegularPatient.created_by),
                 selectinload(RegularPatient.updated_by),
+                selectinload(RegularPatient.identifiers),
+                selectinload(RegularPatient.allergies_structured),
             )
         )
         return result.scalars().first()
@@ -520,6 +586,40 @@ class PatientRepository:
         return schedule
 
     # =========================================================================
+    # Patient allergy
+    # =========================================================================
+
+    async def create_patient_allergy(self, allergy: PatientAllergy) -> PatientAllergy:
+        self.db.add(allergy)
+        await self.db.commit()
+        await self.db.refresh(allergy)
+        return allergy
+
+    async def get_patient_allergy_by_id(
+        self, allergy_id: uuid.UUID
+    ) -> Optional[PatientAllergy]:
+        result = await self.db.execute(
+            select(PatientAllergy).where(PatientAllergy.id == allergy_id)
+        )
+        return result.scalars().first()
+
+    async def get_patient_allergies(
+        self, patient_id: uuid.UUID, active_only: bool = False
+    ) -> List[PatientAllergy]:
+        query = select(PatientAllergy).where(PatientAllergy.patient_id == patient_id)
+        if active_only:
+            query = query.where(PatientAllergy.is_active == True)
+        query = query.order_by(PatientAllergy.is_active.desc(), PatientAllergy.allergen.asc())
+        result = await self.db.execute(query)
+        return list(result.scalars().all())
+
+    async def update_patient_allergy(self, allergy: PatientAllergy) -> PatientAllergy:
+        self.db.add(allergy)
+        await self.db.commit()
+        await self.db.refresh(allergy)
+        return allergy
+
+    # =========================================================================
     # Reminder
     # =========================================================================
 
@@ -640,6 +740,84 @@ class PatientRepository:
         await self.db.commit()
         await self.db.refresh(reminder)
         return reminder
+
+    # =========================================================================
+    # Facility notifications
+    # =========================================================================
+
+    async def create_facility_notification(
+        self, notification: FacilityNotification
+    ) -> FacilityNotification:
+        self.db.add(notification)
+        await self.db.commit()
+        await self.db.refresh(notification)
+        return notification
+
+    async def get_facility_notification_by_reminder(
+        self, reminder_id: uuid.UUID
+    ) -> Optional[FacilityNotification]:
+        result = await self.db.execute(
+            select(FacilityNotification)
+            .options(
+                selectinload(FacilityNotification.patient),
+                selectinload(FacilityNotification.reminder),
+                selectinload(FacilityNotification.assigned_to),
+            )
+            .where(FacilityNotification.reminder_id == reminder_id)
+        )
+        return result.scalars().first()
+
+    async def get_facility_notification_by_id(
+        self, notification_id: uuid.UUID
+    ) -> Optional[FacilityNotification]:
+        result = await self.db.execute(
+            select(FacilityNotification)
+            .options(
+                selectinload(FacilityNotification.patient),
+                selectinload(FacilityNotification.reminder),
+                selectinload(FacilityNotification.assigned_to),
+            )
+            .where(FacilityNotification.id == notification_id)
+        )
+        return result.scalars().first()
+
+    async def list_facility_notifications(
+        self,
+        facility_id: uuid.UUID,
+        status_filter: Optional[str] = None,
+        unresolved_only: bool = True,
+        limit: int = 50,
+    ) -> List[FacilityNotification]:
+        query = (
+            select(FacilityNotification)
+            .options(
+                selectinload(FacilityNotification.patient),
+                selectinload(FacilityNotification.reminder),
+                selectinload(FacilityNotification.assigned_to),
+            )
+            .where(FacilityNotification.facility_id == facility_id)
+        )
+        if status_filter:
+            query = query.where(FacilityNotification.status == status_filter)
+        elif unresolved_only:
+            query = query.where(FacilityNotification.status.notin_(["resolved", "dismissed"]))
+        priority_case = case(
+            (FacilityNotification.priority == "urgent", 0),
+            (FacilityNotification.priority == "high", 1),
+            (FacilityNotification.priority == "normal", 2),
+            else_=3,
+        )
+        query = query.order_by(priority_case, FacilityNotification.due_date.asc(), FacilityNotification.created_at.desc()).limit(limit)
+        result = await self.db.execute(query)
+        return list(result.scalars().all())
+
+    async def update_facility_notification(
+        self, notification: FacilityNotification
+    ) -> FacilityNotification:
+        self.db.add(notification)
+        await self.db.commit()
+        refreshed = await self.get_facility_notification_by_id(notification.id)
+        return refreshed or notification
 
     async def delete_reminder(self, reminder: PatientReminder) -> None:
         await self.db.delete(reminder)

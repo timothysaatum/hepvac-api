@@ -3,7 +3,7 @@ Patient service — business logic layer.
 The service layer orchestrates complex operations that may involve multiple repository calls, transactions, and business rules. It owns the transaction
 """
 
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 import uuid
 
@@ -17,7 +17,9 @@ from app.models.patient_model import (
     Child,
     Prescription,
     MedicationSchedule,
-    PatientReminder, Diagnosis,
+    PatientReminder, Diagnosis, FacilityNotification,
+    PatientIdentifier,
+    PatientAllergy,
 )
 from app.schemas.patient_schemas import (
     PregnantPatientCreateSchema,
@@ -38,19 +40,123 @@ from app.schemas.patient_schemas import (
     ConvertToRegularPatientSchema,
     ReRegisterAsPregnantSchema,
     PatientStatus,
-    PatientType, DiagnosisCreateSchema, DiagnosisUpdateSchema,
+    PatientType,
+    Sex,
+    PatientAllergySchema,
+    PatientAllergyUpdateSchema,
+    FacilityNotificationUpdateSchema,
+    DiagnosisCreateSchema,
+    DiagnosisUpdateSchema,
 )
 from app.repositories.patient_repo import PatientRepository
 from app.services.reminder_schedule import build_reminder_rows, cancel_pending_reminders
-from app.schemas.patient_schemas import ReminderType
+from app.schemas.patient_schemas import ReminderStatus, ReminderType
+from app.models.user_model import User
 
 
 class PatientService:
     """Service layer for patient business logic."""
 
-    def __init__(self, db: AsyncSession):
+    def __init__(self, db: AsyncSession, current_user: Optional[User] = None):
         self.db = db
         self.repo = PatientRepository(self.db)
+        self.current_user = current_user
+
+    def _is_admin_context(self) -> bool:
+        return bool(
+            self.current_user
+            and (
+                self.current_user.has_role("admin")
+                or self.current_user.has_role("superadmin")
+            )
+        )
+
+    def _current_facility_id(self) -> Optional[uuid.UUID]:
+        return self.current_user.facility_id if self.current_user else None
+
+    def _scope_facility_filter(
+        self,
+        requested_facility_id: Optional[uuid.UUID] = None,
+    ) -> Optional[uuid.UUID]:
+        """
+        Staff users are always constrained to their own facility. Admins may
+        pass an explicit facility filter or see cross-facility data.
+        """
+        if self.current_user is None or self._is_admin_context():
+            return requested_facility_id
+
+        user_facility_id = self._current_facility_id()
+        if user_facility_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Your account is not assigned to a facility.",
+            )
+        if requested_facility_id and requested_facility_id != user_facility_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You cannot access patients outside your facility.",
+            )
+        return user_facility_id
+
+    def _assert_facility_access(self, facility_id: Optional[uuid.UUID]) -> None:
+        if self.current_user is None or self._is_admin_context():
+            return
+        if facility_id is None or facility_id != self._current_facility_id():
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Patient not found.",
+            )
+
+    def _display_name_from_identity(self, data: dict) -> str:
+        first_name = (data.get("first_name") or "").strip()
+        last_name = (data.get("last_name") or "").strip()
+        preferred_name = (data.get("preferred_name") or "").strip()
+        explicit_name = (data.get("name") or "").strip()
+        if first_name and last_name:
+            return f"{first_name} {last_name}"
+        if explicit_name:
+            return explicit_name
+        if preferred_name:
+            return preferred_name
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Provide either name or both first_name and last_name.",
+        )
+
+    def _attach_identity_children(
+        self,
+        patient,
+        identifiers: list,
+    ) -> None:
+        for item in identifiers:
+            item_dict = dict(item)
+            item_dict.pop("id", None)
+            item_dict["facility_id"] = patient.facility_id
+            patient.identifiers.append(PatientIdentifier(**item_dict))
+
+    async def _assert_patient_access(self, patient_id: uuid.UUID) -> None:
+        if self.current_user is None or self._is_admin_context():
+            return
+        facility_id = await self.repo.get_patient_facility_id(patient_id)
+        self._assert_facility_access(facility_id)
+
+    async def _assert_pregnancy_access(self, pregnancy_id: uuid.UUID) -> None:
+        if self.current_user is None or self._is_admin_context():
+            return
+        facility_id = await self.repo.get_pregnancy_facility_id(pregnancy_id)
+        self._assert_facility_access(facility_id)
+
+    async def _assert_child_access(self, child_id: uuid.UUID) -> None:
+        if self.current_user is None or self._is_admin_context():
+            return
+        facility_id = await self.repo.get_child_facility_id(child_id)
+        self._assert_facility_access(facility_id)
+
+    async def _assert_diagnosis_access(self, diagnosis_id: uuid.UUID) -> None:
+        if self.current_user is None or self._is_admin_context():
+            return
+        facility_id = await self.repo.get_diagnosis_facility_id(diagnosis_id)
+        self._assert_facility_access(facility_id)
 
     # =========================================================================
     # Pregnant patient
@@ -71,6 +177,12 @@ class PatientService:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Facility ID is required to create a patient.",
             )
+        self._assert_facility_access(patient_data.facility_id)
+        if patient_data.sex != Sex.FEMALE:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Only female patients can be registered as pregnant.",
+            )
 
         existing = await self.repo.get_patient_by_phone(
             patient_data.phone, patient_data.facility_id
@@ -85,10 +197,13 @@ class PatientService:
         # Passing it through model_dump() would include `first_pregnancy` as a
         # dict kwarg to PregnantPatient(**...) which has no such column.
         patient_dict = patient_data.model_dump(exclude={"first_pregnancy"})
+        identifiers = patient_dict.pop("identifiers", []) or []
+        patient_dict["name"] = self._display_name_from_identity(patient_dict)
         patient_dict["patient_type"] = PatientType.PREGNANT
         patient_dict["status"] = PatientStatus.ACTIVE
 
         db_patient = PregnantPatient(**patient_dict)
+        self._attach_identity_children(db_patient, identifiers)
 
         # Open the first pregnancy episode using the model's business logic.
         # This increments gravida to 1 and sets pregnancy_number = 1.
@@ -134,6 +249,7 @@ class PatientService:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Pregnant patient not found.",
             )
+        self._assert_facility_access(patient.facility_id)
         return patient
 
     async def update_pregnant_patient(
@@ -149,6 +265,7 @@ class PatientService:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Pregnant patient not found.",
             )
+        self._assert_facility_access(patient.facility_id)
 
         update_dict = update_data.model_dump(exclude_unset=True)
 
@@ -161,6 +278,17 @@ class PatientService:
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail="A patient with this phone number already exists.",
                 )
+
+        identity_fields = {"first_name", "last_name", "preferred_name"}
+        if "name" not in update_dict and identity_fields.intersection(update_dict):
+            merged = {
+                "name": patient.name,
+                "first_name": patient.first_name,
+                "last_name": patient.last_name,
+                "preferred_name": patient.preferred_name,
+            }
+            merged.update(update_dict)
+            update_dict["name"] = self._display_name_from_identity(merged)
 
         for field, value in update_dict.items():
             setattr(patient, field, value)
@@ -196,6 +324,7 @@ class PatientService:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Pregnant patient not found.",
             )
+        self._assert_facility_access(pregnant_patient.facility_id)
 
         if pregnant_patient.status not in (PatientStatus.ACTIVE, PatientStatus.POSTPARTUM):
             raise HTTPException(
@@ -239,10 +368,6 @@ class PatientService:
         #   b. INSERT into regular_patients (subtype table only).
         from sqlalchemy import text as _text, select as _select
 
-        delivery_date = conversion_data.actual_delivery_date or (
-            active_pregnancy.actual_delivery_date if active_pregnancy else None
-        )
-
         try:
             await self.db.execute(
                 _text("""
@@ -258,21 +383,13 @@ class PatientService:
             await self.db.execute(
                 _text("""
                     INSERT INTO regular_patients
-                        (id, diagnosis_date, treatment_start_date, treatment_regimen, notes)
+                        (id)
                     VALUES
-                        (:id, :diagnosis_date, :treatment_start_date, :treatment_regimen, :notes)
-                    ON CONFLICT (id) DO UPDATE SET
-                        diagnosis_date = COALESCE(EXCLUDED.diagnosis_date, regular_patients.diagnosis_date),
-                        treatment_start_date = COALESCE(EXCLUDED.treatment_start_date, regular_patients.treatment_start_date),
-                        treatment_regimen = COALESCE(EXCLUDED.treatment_regimen, regular_patients.treatment_regimen),
-                        notes = COALESCE(EXCLUDED.notes, regular_patients.notes)
+                        (:id)
+                    ON CONFLICT (id) DO NOTHING
                 """),
                 {
-                    "id":                   str(patient_id),
-                    "diagnosis_date":       delivery_date,
-                    "treatment_start_date": delivery_date,
-                    "treatment_regimen":    conversion_data.treatment_regimen,
-                    "notes":                conversion_data.notes,
+                    "id": str(patient_id),
                 },
             )
 
@@ -308,6 +425,8 @@ class PatientService:
                 _sil(RegularPatient.facility),
                 _sil(RegularPatient.created_by),
                 _sil(RegularPatient.updated_by),
+                _sil(RegularPatient.identifiers),
+                _sil(RegularPatient.allergies_structured),
             )
         )
         regular_patient = result.scalars().first()
@@ -344,6 +463,7 @@ class PatientService:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Facility ID is required to create a patient.",
             )
+        self._assert_facility_access(patient_data.facility_id)
 
         existing = await self.repo.get_patient_by_phone(
             patient_data.phone, patient_data.facility_id
@@ -355,10 +475,13 @@ class PatientService:
             )
 
         patient_dict = patient_data.model_dump()
+        identifiers = patient_dict.pop("identifiers", []) or []
+        patient_dict["name"] = self._display_name_from_identity(patient_dict)
         patient_dict["patient_type"] = PatientType.REGULAR
         patient_dict["status"] = PatientStatus.ACTIVE
 
         db_patient = RegularPatient(**patient_dict)
+        self._attach_identity_children(db_patient, identifiers)
         return await self.repo.create_regular_patient(db_patient)
 
     async def get_regular_patient(self, patient_id: uuid.UUID) -> RegularPatient:
@@ -369,6 +492,7 @@ class PatientService:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Regular patient not found.",
             )
+        self._assert_facility_access(patient.facility_id)
         return patient
 
     async def update_regular_patient(
@@ -384,6 +508,7 @@ class PatientService:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Regular patient not found.",
             )
+        self._assert_facility_access(patient.facility_id)
 
         update_dict = update_data.model_dump(exclude_unset=True)
 
@@ -396,6 +521,17 @@ class PatientService:
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail="A patient with this phone number already exists.",
                 )
+
+        identity_fields = {"first_name", "last_name", "preferred_name"}
+        if "name" not in update_dict and identity_fields.intersection(update_dict):
+            merged = {
+                "name": patient.name,
+                "first_name": patient.first_name,
+                "last_name": patient.last_name,
+                "preferred_name": patient.preferred_name,
+            }
+            merged.update(update_dict)
+            update_dict["name"] = self._display_name_from_identity(merged)
 
         for field, value in update_dict.items():
             setattr(patient, field, value)
@@ -410,6 +546,7 @@ class PatientService:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Patient not found.",
             )
+        self._assert_facility_access(patient.facility_id)
         return patient
 
     # =========================================================================
@@ -449,6 +586,7 @@ class PatientService:
                     detail=f"Invalid patient_status. Must be one of: {[s.value for s in PatientStatus]}.",
                 )
 
+        facility_id = self._scope_facility_filter(facility_id)
         skip = (page - 1) * page_size
         return await self.repo.list_patients_paginated(
             facility_id=facility_id,
@@ -465,6 +603,7 @@ class PatientService:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND, detail="Patient not found."
             )
+        self._assert_facility_access(patient.facility_id)
         await self.repo.delete_patient(patient)
         return True
 
@@ -490,6 +629,7 @@ class PatientService:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Pregnant patient not found.",
             )
+        self._assert_facility_access(patient.facility_id)
 
         try:
             pregnancy = patient.open_new_pregnancy()
@@ -537,6 +677,7 @@ class PatientService:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Pregnancy not found.",
             )
+        await self._assert_pregnancy_access(pregnancy_id)
         return pregnancy
 
     async def list_patient_pregnancies(
@@ -549,6 +690,7 @@ class PatientService:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Pregnant patient not found.",
             )
+        self._assert_facility_access(patient.facility_id)
         return await self.repo.get_patient_pregnancies(patient_id)
 
     async def update_pregnancy(
@@ -563,6 +705,7 @@ class PatientService:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Pregnancy not found.",
             )
+        await self._assert_pregnancy_access(pregnancy_id)
         if not pregnancy.is_active:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -623,6 +766,7 @@ class PatientService:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Pregnancy not found.",
             )
+        await self._assert_pregnancy_access(pregnancy_id)
         if not pregnancy.is_active:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -667,6 +811,7 @@ class PatientService:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Pregnancy not found.",
             )
+        await self._assert_pregnancy_access(child_data.pregnancy_id)
 
         child_dict = child_data.model_dump()
         child_dict["six_month_checkup_date"] = (
@@ -704,6 +849,7 @@ class PatientService:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Child record not found.",
             )
+        await self._assert_child_access(child_id)
         return child
 
     async def update_child(
@@ -719,6 +865,7 @@ class PatientService:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Child record not found.",
             )
+        await self._assert_child_access(child_id)
         update_dict = update_data.model_dump(exclude_unset=True)
         # Stamp the audit field regardless of whether the caller included it
         # in the schema body — always prefer the injected auth-context value.
@@ -776,6 +923,7 @@ class PatientService:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Pregnancy not found.",
             )
+        await self._assert_pregnancy_access(pregnancy_id)
         return await self.repo.get_pregnancy_children(pregnancy_id)
 
     async def list_mother_children(self, patient_id: uuid.UUID) -> List[Child]:
@@ -786,6 +934,7 @@ class PatientService:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Pregnant patient not found.",
             )
+        self._assert_facility_access(patient.facility_id)
         return await self.repo.get_mother_children(patient_id)
 
     # =========================================================================
@@ -805,6 +954,7 @@ class PatientService:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND, detail="Patient not found."
             )
+        self._assert_facility_access(patient.facility_id)
         prescription_dict = prescription_data.model_dump()
         prescription_dict["is_active"] = True
         return await self.repo.create_prescription(Prescription(**prescription_dict))
@@ -839,6 +989,7 @@ class PatientService:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND, detail="Patient not found."
             )
+        self._assert_facility_access(patient.facility_id)
         return await self.repo.get_patient_prescriptions(patient_id, active_only)
 
     # =========================================================================
@@ -858,6 +1009,7 @@ class PatientService:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND, detail="Patient not found."
             )
+        self._assert_facility_access(patient.facility_id)
         schedule_dict = schedule_data.model_dump()
         schedule_dict.update(
             is_completed=False,
@@ -900,7 +1052,64 @@ class PatientService:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND, detail="Patient not found."
             )
+        self._assert_facility_access(patient.facility_id)
         return await self.repo.get_patient_medication_schedules(patient_id, active_only)
+
+    # =========================================================================
+    # Patient allergy
+    # =========================================================================
+
+    async def create_patient_allergy(
+        self,
+        patient_id: uuid.UUID,
+        allergy_data: PatientAllergySchema,
+        recorded_by_id: uuid.UUID,
+    ) -> PatientAllergy:
+        patient = await self.repo.get_patient_by_id(patient_id)
+        if not patient:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Patient not found.",
+            )
+        self._assert_facility_access(patient.facility_id)
+        allergy_dict = allergy_data.model_dump(exclude={"id"})
+        allergy_dict["patient_id"] = patient_id
+        allergy_dict["recorded_by_id"] = recorded_by_id
+        return await self.repo.create_patient_allergy(PatientAllergy(**allergy_dict))
+
+    async def list_patient_allergies(
+        self, patient_id: uuid.UUID, active_only: bool = False
+    ) -> List[PatientAllergy]:
+        patient = await self.repo.get_patient_by_id(patient_id)
+        if not patient:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Patient not found.",
+            )
+        self._assert_facility_access(patient.facility_id)
+        return await self.repo.get_patient_allergies(patient_id, active_only)
+
+    async def update_patient_allergy(
+        self,
+        allergy_id: uuid.UUID,
+        update_data: PatientAllergyUpdateSchema,
+    ) -> PatientAllergy:
+        allergy = await self.repo.get_patient_allergy_by_id(allergy_id)
+        if not allergy:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Allergy record not found.",
+            )
+        patient = await self.repo.get_patient_by_id(allergy.patient_id)
+        if not patient:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Patient not found.",
+            )
+        self._assert_facility_access(patient.facility_id)
+        for field, value in update_data.model_dump(exclude_unset=True).items():
+            setattr(allergy, field, value)
+        return await self.repo.update_patient_allergy(allergy)
 
     # =========================================================================
     # Reminder
@@ -919,15 +1128,48 @@ class PatientService:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND, detail="Patient not found."
             )
+        self._assert_facility_access(patient.facility_id)
         if reminder_data.child_id:
             child = await self.repo.get_child_by_id(reminder_data.child_id)
             if not child:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND, detail="Child not found."
                 )
+            await self._assert_child_access(reminder_data.child_id)
         reminder_dict = reminder_data.model_dump()
         reminder_dict["status"] = "pending"
         return await self.repo.create_reminder(PatientReminder(**reminder_dict))
+
+    async def create_facility_notification_for_reminder(
+        self, reminder: PatientReminder
+    ) -> Optional[FacilityNotification]:
+        existing = await self.repo.get_facility_notification_by_reminder(reminder.id)
+        if existing:
+            return existing
+        patient = await self.repo.get_patient_by_id(reminder.patient_id)
+        if not patient:
+            return None
+        priority = "urgent" if reminder.scheduled_date <= datetime.now(timezone.utc).date() else "high"
+        reminder_type = getattr(reminder.reminder_type, "value", reminder.reminder_type)
+        patient_type = getattr(patient.patient_type, "value", patient.patient_type)
+        notification = FacilityNotification(
+            facility_id=patient.facility_id,
+            patient_id=patient.id,
+            reminder_id=reminder.id,
+            title="Call patient for reminder follow-up",
+            message=(
+                f"{patient.name} received a {str(reminder_type).replace('_', ' ')} "
+                f"reminder. Please call to confirm they understood and can attend."
+            ),
+            notification_type="patient_reminder_call",
+            priority=priority,
+            status="unread",
+            action_label="Open patient",
+            action_url=f"/patients/{patient.id}?type={str(patient_type).lower()}",
+            due_date=reminder.scheduled_date,
+            patient_phone=patient.phone,
+        )
+        return await self.repo.create_facility_notification(notification)
 
     async def get_reminder(self, reminder_id: uuid.UUID) -> PatientReminder:
         reminder = await self.repo.get_reminder_by_id(reminder_id)
@@ -947,7 +1189,10 @@ class PatientService:
             )
         for field, value in update_data.model_dump(exclude_unset=True).items():
             setattr(reminder, field, value)
-        return await self.repo.update_reminder(reminder)
+        updated = await self.repo.update_reminder(reminder)
+        if updated.status == ReminderStatus.SENT:
+            await self.create_facility_notification_for_reminder(updated)
+        return updated
 
     async def list_patient_reminders(
         self, patient_id: uuid.UUID, pending_only: bool = False
@@ -957,7 +1202,49 @@ class PatientService:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND, detail="Patient not found."
             )
+        self._assert_facility_access(patient.facility_id)
         return await self.repo.get_patient_reminders(patient_id, pending_only)
+
+    async def list_facility_notifications(
+        self,
+        status_filter: Optional[str] = None,
+        unresolved_only: bool = True,
+        limit: int = 50,
+    ) -> List[FacilityNotification]:
+        facility_id = self._current_facility_id()
+        if facility_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Your account is not assigned to a facility.",
+            )
+        return await self.repo.list_facility_notifications(
+            facility_id=facility_id,
+            status_filter=status_filter,
+            unresolved_only=unresolved_only,
+            limit=limit,
+        )
+
+    async def update_facility_notification(
+        self,
+        notification_id: uuid.UUID,
+        update_data: FacilityNotificationUpdateSchema,
+    ) -> FacilityNotification:
+        notification = await self.repo.get_facility_notification_by_id(notification_id)
+        if not notification:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Notification not found.",
+            )
+        self._assert_facility_access(notification.facility_id)
+        changes = update_data.model_dump(exclude_unset=True)
+        now = datetime.now(timezone.utc)
+        for field, value in changes.items():
+            setattr(notification, field, value)
+        if changes.get("status") in {"acknowledged", "in_progress"} and notification.acknowledged_at is None:
+            notification.acknowledged_at = now
+        if changes.get("status") in {"resolved", "dismissed"}:
+            notification.resolved_at = now
+        return await self.repo.update_facility_notification(notification)
 
     async def list_patient_reminders_paginated(
         self,
@@ -972,6 +1259,7 @@ class PatientService:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND, detail="Patient not found."
             )
+        self._assert_facility_access(patient.facility_id)
         return await self.repo.get_patient_reminders_paginated(
             patient_id=patient_id,
             pagination=pagination,
@@ -996,6 +1284,7 @@ class PatientService:
             raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND, detail="Patient not found."
                 )
+        self._assert_facility_access(patient.facility_id)
         diagnosis_dict = diagnosis_data.model_dump()
         return await self.repo.create_diagnosis(Diagnosis(**diagnosis_dict))
 
@@ -1005,6 +1294,7 @@ class PatientService:
             raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND, detail="Diagnosis not found."
                 )
+        await self._assert_diagnosis_access(diagnosis_id)
         return diagnosis
 
     async def update_diagnosis(
@@ -1015,6 +1305,7 @@ class PatientService:
             raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND, detail="Diagnosis not found."
                 )
+        await self._assert_diagnosis_access(diagnosis_id)
         for field, value in update_data.model_dump(exclude_unset=True).items():
             setattr(diagnosis, field, value)
         return await self.repo.update_diagnosis(diagnosis)
@@ -1025,6 +1316,7 @@ class PatientService:
             raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND, detail="Diagnosis not found."
                 )
+        await self._assert_diagnosis_access(diagnosis_id)
         diagnosis.is_deleted = True
         from datetime import datetime, timezone
         diagnosis.deleted_at = datetime.now(timezone.utc)
@@ -1038,6 +1330,7 @@ class PatientService:
             raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND, detail="Patient not found."
                 )
+        self._assert_facility_access(patient.facility_id)
         return await self.repo.get_patient_diagnoses(patient_id)
 
     # =========================================================================
@@ -1077,6 +1370,7 @@ class PatientService:
         if not regular:
             base = await self.repo.get_patient_by_id(patient_id)
             if base:
+                self._assert_facility_access(base.facility_id)
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
                     detail="Patient is already registered as pregnant.",
@@ -1084,6 +1378,12 @@ class PatientService:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Regular patient not found.",
+            )
+        self._assert_facility_access(regular.facility_id)
+        if regular.sex != Sex.FEMALE:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Only female patients can be re-registered as pregnant.",
             )
 
         # Step 1: Flip discriminator back to PREGNANT.
@@ -1122,6 +1422,8 @@ class PatientService:
                 _sil(PregnantPatient.created_by),
                 _sil(PregnantPatient.updated_by),
                 _sil(PregnantPatient.pregnancies),
+                _sil(PregnantPatient.identifiers),
+                _sil(PregnantPatient.allergies_structured),
             )
         )
         pregnant_patient = result.scalars().first()
@@ -1161,6 +1463,8 @@ class PatientService:
                     _sil(PregnantPatient.created_by),
                     _sil(PregnantPatient.updated_by),
                     _sil(PregnantPatient.pregnancies),
+                    _sil(PregnantPatient.identifiers),
+                    _sil(PregnantPatient.allergies_structured),
                 )
             )
             pregnant_patient = result.scalars().first()
@@ -1223,6 +1527,8 @@ class PatientService:
                 _sil(PregnantPatient.created_by),
                 _sil(PregnantPatient.updated_by),
                 _sil(PregnantPatient.pregnancies),
+                _sil(PregnantPatient.identifiers),
+                _sil(PregnantPatient.allergies_structured),
             )
         )
         return final.scalars().first()

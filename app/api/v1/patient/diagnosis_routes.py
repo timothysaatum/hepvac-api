@@ -29,7 +29,7 @@ async def create_diagnosis(
     current_user: User = Depends(require_staff_or_admin()),
 ):
     """Create a diagnosis record for a patient (Staff only)."""
-    service = PatientService(db)
+    service = PatientService(db, current_user)
     try:
         # Set patient_id and diagnosed_by_id from URL path and current user
         diagnosis_payload = DiagnosisCreateSchema(
@@ -75,7 +75,7 @@ async def list_patient_diagnoses(
     current_user: User = Depends(require_staff_or_admin()),
 ):
     """List all diagnoses for a patient (Staff only)."""
-    service = PatientService(db)
+    service = PatientService(db, current_user)
     try:
         diagnoses = await service.list_patient_diagnoses(patient_id)
         return [DiagnosisResponseSchema.from_diagnosis(d) for d in diagnoses]
@@ -105,7 +105,7 @@ async def update_diagnosis(
     current_user: User = Depends(require_staff_or_admin()),
 ):
     """Update a diagnosis record (Staff only)."""
-    service = PatientService(db)
+    service = PatientService(db, current_user)
     try:
         diagnosis = await service.update_diagnosis(diagnosis_id, update_data)
         logger.log_info({
@@ -139,7 +139,7 @@ async def delete_diagnosis(
     current_user: User = Depends(require_staff_or_admin()),
 ):
     """Soft-delete a diagnosis record (Staff only)."""
-    service = PatientService(db)
+    service = PatientService(db, current_user)
     try:
         await service.delete_diagnosis(diagnosis_id)
         logger.log_info({

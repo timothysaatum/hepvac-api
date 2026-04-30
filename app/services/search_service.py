@@ -1,6 +1,8 @@
 import math
 from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
+from typing import Optional
+import uuid
 
 from app.repositories.search_repo import SearchRepository
 from app.schemas.search_schemas import (
@@ -16,15 +18,44 @@ from app.schemas.search_schemas import (
 )
 from decimal import Decimal
 from app.models.patient_model import Patient, Vaccination, Payment
+from app.models.user_model import User
 from app.schemas.patient_schemas import PatientType, PregnancySummarySchema
 
 
 class SearchService:
     """Service layer for search operations."""
 
-    def __init__(self, db: AsyncSession):
+    def __init__(self, db: AsyncSession, current_user: Optional[User] = None):
         self.db = db
         self.repo = SearchRepository(self.db)
+        self.current_user = current_user
+
+    def _is_admin_context(self) -> bool:
+        return bool(
+            self.current_user
+            and (
+                self.current_user.has_role("admin")
+                or self.current_user.has_role("superadmin")
+            )
+        )
+
+    def _scope_facility_filter(
+        self,
+        requested_facility_id: Optional[uuid.UUID],
+    ) -> Optional[uuid.UUID]:
+        if self.current_user is None or self._is_admin_context():
+            return requested_facility_id
+        if self.current_user.facility_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Your account is not assigned to a facility.",
+            )
+        if requested_facility_id and requested_facility_id != self.current_user.facility_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You cannot search outside your facility.",
+            )
+        return self.current_user.facility_id
 
     # ============= Patient Search =============
     async def search_patients(
@@ -59,12 +90,13 @@ class SearchService:
 
         # Calculate skip
         skip = (page - 1) * page_size
+        facility_id = self._scope_facility_filter(filters.facility_id)
 
         # Search patients
         patients, total_count = await self.repo.search_patients(
             name=filters.name,
             phone=filters.phone,
-            facility_id=filters.facility_id,
+            facility_id=facility_id,
             patient_type=filters.patient_type,
             status=filters.status.value if filters.status else None,
             sex=filters.sex.value if filters.sex else None,
@@ -121,11 +153,6 @@ class SearchService:
             result_dict["active_pregnancy"] = (
                 PregnancySummarySchema.model_validate(active) if active else None
             )
-        elif patient.patient_type == PatientType.REGULAR:
-            result_dict["diagnosis_date"] = getattr(patient, "diagnosis_date", None)
-            result_dict["treatment_start_date"] = getattr(patient, "treatment_start_date", None)
-            result_dict["viral_load"] = getattr(patient, "viral_load", None)
-
         return PatientSearchResult(**result_dict)
 
     # ============= Vaccination Search =============

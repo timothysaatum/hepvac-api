@@ -11,7 +11,7 @@ import re
 from typing import TYPE_CHECKING, Dict, List, Optional
 import uuid
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, field_validator, model_validator
 from sqlalchemy.dialects.postgresql import ENUM as PGENUM
 
 if TYPE_CHECKING:
@@ -143,6 +143,80 @@ class UserInfoSchema(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class PatientIdentifierSchema(BaseModel):
+    id: Optional[uuid.UUID] = None
+    identifier_type: str
+    identifier_value: str
+    issuer: Optional[str] = None
+    is_primary: bool = False
+
+    @field_validator("identifier_type", "identifier_value")
+    @classmethod
+    def validate_identifier(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("Identifier type and value are required.")
+        return v.strip().upper()
+
+    model_config = {"from_attributes": True}
+
+
+class PatientAllergySchema(BaseModel):
+    id: Optional[uuid.UUID] = None
+    allergen: str
+    reaction: Optional[str] = None
+    severity: Optional[str] = "unknown"
+    notes: Optional[str] = None
+    is_active: bool = True
+
+    @field_validator("allergen")
+    @classmethod
+    def validate_allergen(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("Allergen is required.")
+        return v.strip()
+
+    @field_validator("severity")
+    @classmethod
+    def validate_severity(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        v = v.strip().lower()
+        if v not in {"mild", "moderate", "severe", "life_threatening", "unknown"}:
+            raise ValueError("Invalid allergy severity.")
+        return v
+
+    model_config = {"from_attributes": True}
+
+
+class PatientAllergyUpdateSchema(BaseModel):
+    allergen: Optional[str] = None
+    reaction: Optional[str] = None
+    severity: Optional[str] = None
+    notes: Optional[str] = None
+    is_active: Optional[bool] = None
+
+    @field_validator("allergen")
+    @classmethod
+    def validate_allergen(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        if not v.strip():
+            raise ValueError("Allergen is required.")
+        return v.strip()
+
+    @field_validator("severity")
+    @classmethod
+    def validate_severity(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        v = v.strip().lower()
+        if v not in {"mild", "moderate", "severe", "life_threatening", "unknown"}:
+            raise ValueError("Invalid allergy severity.")
+        return v
+
+    model_config = {"from_attributes": True}
+
+
 # ============================================================================
 # Base Patient
 # ============================================================================
@@ -157,23 +231,57 @@ class PatientBaseSchema(BaseModel):
     meaningless — the model does not store it as a column.
     """
 
-    name:          str
+    name:          Optional[str] = None
+    first_name:    Optional[str] = None
+    last_name:     Optional[str] = None
+    preferred_name: Optional[str] = None
+    medical_record_number: Optional[str] = None
     phone:         str
     sex:           Sex
     date_of_birth: Optional[date]    = None
+    address_line: Optional[str] = None
+    city: Optional[str] = None
+    district: Optional[str] = None
+    region: Optional[str] = None
+    country: Optional[str] = None
+    emergency_contact_name: Optional[str] = None
+    emergency_contact_phone: Optional[str] = None
+    emergency_contact_relationship: Optional[str] = None
+    identifiers: List[PatientIdentifierSchema] = []
     facility_id:   Optional[uuid.UUID] = None
     created_by_id: Optional[uuid.UUID] = None
+    accepts_messaging: bool = False
 
-    @field_validator("name")
+    @model_validator(mode="after")
+    def validate_identity(self):
+        if not self.name and not (self.first_name and self.last_name):
+            raise ValueError("Provide either name or both first_name and last_name.")
+        return self
+
+    @field_validator("name", "first_name", "last_name", "preferred_name", "emergency_contact_name")
     @classmethod
-    def validate_name(cls, v: str) -> str:
-        if not v or not v.strip():
-            raise ValueError("Name cannot be empty.")
+    def validate_name(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
         v = v.strip()
+        if not v:
+            return None
         if len(v) < 2 or len(v) > 255:
             raise ValueError("Name must be between 2 and 255 characters.")
         if any(char.isdigit() for char in v):
             raise ValueError("Name must not contain numbers.")
+        return v
+
+    @field_validator("medical_record_number")
+    @classmethod
+    def validate_mrn(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        v = v.strip().upper()
+        if not v:
+            return None
+        if not re.match(r"^[A-Z0-9][A-Z0-9\-_/]{1,63}$", v):
+            raise ValueError("Medical record number contains invalid characters.")
         return v
 
     @field_validator("phone")
@@ -181,14 +289,28 @@ class PatientBaseSchema(BaseModel):
     def validate_phone(cls, v: str) -> str:
         if not v or not v.strip():
             raise ValueError("Phone number is required.")
-        v = v.strip()
-        if any(c.isalpha() for c in v):
+        raw = v.strip()
+        if any(c.isalpha() for c in raw):
             raise ValueError("Phone number must not contain letters.")
-        if not re.match(r"^\+?\d{10,15}$", v):
+        digits = re.sub(r"\D", "", raw)
+        if not (10 <= len(digits) <= 15):
             raise ValueError(
-                "Phone number must be 10–15 digits, optionally starting with '+'."
+                "Phone number must contain 10–15 digits."
             )
-        return v
+        return f"+{digits}"
+
+    @field_validator("emergency_contact_phone")
+    @classmethod
+    def validate_emergency_phone(cls, v: Optional[str]) -> Optional[str]:
+        if v is None or not v.strip():
+            return None
+        raw = v.strip()
+        if any(c.isalpha() for c in raw):
+            raise ValueError("Emergency contact phone must not contain letters.")
+        digits = re.sub(r"\D", "", raw)
+        if not (10 <= len(digits) <= 15):
+            raise ValueError("Emergency contact phone must contain 10–15 digits.")
+        return f"+{digits}"
 
     model_config = {"from_attributes": True}
 
@@ -333,13 +455,15 @@ class PregnantPatientBaseSchema(PatientBaseSchema):
     PregnantPatientCreateSchema which embeds a PregnancyCreateSchema.
     """
 
-    # Sex defaults to FEMALE for pregnant patients; can be overridden for
-    # edge cases but is validated at the service layer.
+    # Pregnancy registration is restricted to female patients. Clinical edge
+    # cases should be modeled explicitly instead of weakening this registry rule.
     sex: Sex = Sex.FEMALE
 
     @field_validator("sex")
     @classmethod
     def validate_sex(cls, v: Sex) -> Sex:
+        if v != Sex.FEMALE:
+            raise ValueError("Pregnant patients must have sex recorded as female.")
         return v
 
 
@@ -370,12 +494,25 @@ class PregnantPatientUpdateSchema(BaseModel):
     """
 
     name:          Optional[str]           = None
+    first_name:    Optional[str]           = None
+    last_name:     Optional[str]           = None
+    preferred_name: Optional[str]          = None
+    medical_record_number: Optional[str]   = None
     phone:         Optional[str]           = None
     date_of_birth: Optional[date]          = None
+    address_line: Optional[str]            = None
+    city: Optional[str]                    = None
+    district: Optional[str]                = None
+    region: Optional[str]                  = None
+    country: Optional[str]                 = None
+    emergency_contact_name: Optional[str]  = None
+    emergency_contact_phone: Optional[str] = None
+    emergency_contact_relationship: Optional[str] = None
     status:        Optional[PatientStatus] = None
+    accepts_messaging: Optional[bool]      = None
     updated_by_id: Optional[uuid.UUID]     = None
 
-    @field_validator("name")
+    @field_validator("name", "first_name", "last_name", "preferred_name", "emergency_contact_name")
     @classmethod
     def validate_name(cls, v: Optional[str]) -> Optional[str]:
         if v is None:
@@ -387,17 +524,45 @@ class PregnantPatientUpdateSchema(BaseModel):
             raise ValueError("Name must be between 2 and 255 characters.")
         return v
 
+    @field_validator("medical_record_number")
+    @classmethod
+    def validate_mrn(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        v = v.strip().upper()
+        if not v:
+            return None
+        if not re.match(r"^[A-Z0-9][A-Z0-9\-_/]{1,63}$", v):
+            raise ValueError("Medical record number contains invalid characters.")
+        return v
+
     @field_validator("phone")
     @classmethod
     def validate_phone(cls, v: Optional[str]) -> Optional[str]:
         if v is None:
             return v
-        v = v.strip()
-        if not re.match(r"^\+?\d{10,15}$", v):
+        raw = v.strip()
+        if any(c.isalpha() for c in raw):
+            raise ValueError("Phone number must not contain letters.")
+        digits = re.sub(r"\D", "", raw)
+        if not (10 <= len(digits) <= 15):
             raise ValueError(
-                "Phone number must be 10–15 digits, optionally starting with '+'."
+                "Phone number must contain 10–15 digits."
             )
-        return v
+        return f"+{digits}"
+
+    @field_validator("emergency_contact_phone")
+    @classmethod
+    def validate_emergency_phone(cls, v: Optional[str]) -> Optional[str]:
+        if v is None or not v.strip():
+            return None
+        raw = v.strip()
+        if any(c.isalpha() for c in raw):
+            raise ValueError("Emergency contact phone must not contain letters.")
+        digits = re.sub(r"\D", "", raw)
+        if not (10 <= len(digits) <= 15):
+            raise ValueError("Emergency contact phone must contain 10–15 digits.")
+        return f"+{digits}"
 
     model_config = {"from_attributes": True}
 
@@ -413,12 +578,26 @@ class PregnantPatientResponseSchema(BaseModel):
 
     id:           uuid.UUID
     name:         Optional[str]        = None
+    first_name:   Optional[str]        = None
+    last_name:    Optional[str]        = None
+    preferred_name: Optional[str]      = None
+    medical_record_number: Optional[str] = None
     phone:        Optional[str]        = None
     age:          Optional[int]        = None
     sex:          Sex
     date_of_birth: Optional[date]      = None
     patient_type: str
     status:       PatientStatus
+    accepts_messaging: bool
+    address_line: Optional[str]        = None
+    city: Optional[str]                = None
+    district: Optional[str]            = None
+    region: Optional[str]              = None
+    country: Optional[str]             = None
+    emergency_contact_name: Optional[str] = None
+    emergency_contact_phone: Optional[str] = None
+    emergency_contact_relationship: Optional[str] = None
+    identifiers: List[PatientIdentifierSchema] = []
     gravida:      int
     para:         int
 
@@ -480,12 +659,29 @@ class PregnantPatientResponseSchema(BaseModel):
         return cls(
             id=patient.id,
             name=patient.name,
+            first_name=patient.first_name,
+            last_name=patient.last_name,
+            preferred_name=patient.preferred_name,
+            medical_record_number=patient.medical_record_number,
             phone=patient.phone,
             age=patient.age,   # computed property
             sex=patient.sex,
             date_of_birth=patient.date_of_birth,
             patient_type=patient.patient_type,
             status=patient.status,
+            accepts_messaging=patient.accepts_messaging,
+            address_line=patient.address_line,
+            city=patient.city,
+            district=patient.district,
+            region=patient.region,
+            country=patient.country,
+            emergency_contact_name=patient.emergency_contact_name,
+            emergency_contact_phone=patient.emergency_contact_phone,
+            emergency_contact_relationship=patient.emergency_contact_relationship,
+            identifiers=[
+                PatientIdentifierSchema.model_validate(i)
+                for i in getattr(patient, "identifiers", [])
+            ],
             gravida=patient.gravida,
             para=patient.para,
             active_pregnancy=active_preg_schema,
@@ -513,16 +709,7 @@ class PregnantPatientResponseSchema(BaseModel):
 
 
 class RegularPatientBaseSchema(PatientBaseSchema):
-    """Input fields for a regular (non-pregnant) patient."""
-
-    diagnosis_date:     Optional[date] = None
-    viral_load:         Optional[str]  = None
-    last_viral_load_date: Optional[date] = None
-    treatment_start_date: Optional[date] = None
-    treatment_regimen:  Optional[str]  = None
-    medical_history:    Optional[str]  = None
-    allergies:          Optional[str]  = None
-    notes:              Optional[str]  = None
+    """Identity/contact fields for a regular (non-pregnant) patient."""
 
 
 class RegularPatientCreateSchema(RegularPatientBaseSchema):
@@ -536,23 +723,28 @@ class RegularPatientCreateSchema(RegularPatientBaseSchema):
 
 
 class RegularPatientUpdateSchema(BaseModel):
-    """Update a regular patient. All fields optional."""
+    """Update patient-level regular patient fields. All fields optional."""
 
     name:                Optional[str]           = None
+    first_name:          Optional[str]           = None
+    last_name:           Optional[str]           = None
+    preferred_name:      Optional[str]           = None
+    medical_record_number: Optional[str]         = None
     phone:               Optional[str]           = None
     date_of_birth:       Optional[date]          = None
-    diagnosis_date:      Optional[date]          = None
-    viral_load:          Optional[str]           = None
-    last_viral_load_date: Optional[date]         = None
-    treatment_start_date: Optional[date]         = None
-    treatment_regimen:   Optional[str]           = None
-    medical_history:     Optional[str]           = None
-    allergies:           Optional[str]           = None
-    notes:               Optional[str]           = None
+    address_line:        Optional[str]           = None
+    city:                Optional[str]           = None
+    district:            Optional[str]           = None
+    region:              Optional[str]           = None
+    country:             Optional[str]           = None
+    emergency_contact_name: Optional[str]        = None
+    emergency_contact_phone: Optional[str]       = None
+    emergency_contact_relationship: Optional[str] = None
     status:              Optional[PatientStatus] = None
+    accepts_messaging:   Optional[bool]          = None
     updated_by_id:       Optional[uuid.UUID]     = None
 
-    @field_validator("name")
+    @field_validator("name", "first_name", "last_name", "preferred_name", "emergency_contact_name")
     @classmethod
     def validate_name(cls, v: Optional[str]) -> Optional[str]:
         if v is None:
@@ -564,17 +756,45 @@ class RegularPatientUpdateSchema(BaseModel):
             raise ValueError("Name must be between 2 and 255 characters.")
         return v
 
+    @field_validator("medical_record_number")
+    @classmethod
+    def validate_mrn(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        v = v.strip().upper()
+        if not v:
+            return None
+        if not re.match(r"^[A-Z0-9][A-Z0-9\-_/]{1,63}$", v):
+            raise ValueError("Medical record number contains invalid characters.")
+        return v
+
     @field_validator("phone")
     @classmethod
     def validate_phone(cls, v: Optional[str]) -> Optional[str]:
         if v is None:
             return v
-        v = v.strip()
-        if not re.match(r"^\+?\d{10,15}$", v):
+        raw = v.strip()
+        if any(c.isalpha() for c in raw):
+            raise ValueError("Phone number must not contain letters.")
+        digits = re.sub(r"\D", "", raw)
+        if not (10 <= len(digits) <= 15):
             raise ValueError(
-                "Phone number must be 10–15 digits, optionally starting with '+'."
+                "Phone number must contain 10–15 digits."
             )
-        return v
+        return f"+{digits}"
+
+    @field_validator("emergency_contact_phone")
+    @classmethod
+    def validate_emergency_phone(cls, v: Optional[str]) -> Optional[str]:
+        if v is None or not v.strip():
+            return None
+        raw = v.strip()
+        if any(c.isalpha() for c in raw):
+            raise ValueError("Emergency contact phone must not contain letters.")
+        digits = re.sub(r"\D", "", raw)
+        if not (10 <= len(digits) <= 15):
+            raise ValueError("Emergency contact phone must contain 10–15 digits.")
+        return f"+{digits}"
 
     model_config = {"from_attributes": True}
 
@@ -584,20 +804,26 @@ class RegularPatientResponseSchema(BaseModel):
 
     id:                  uuid.UUID
     name:                Optional[str]        = None
+    first_name:          Optional[str]        = None
+    last_name:           Optional[str]        = None
+    preferred_name:      Optional[str]        = None
+    medical_record_number: Optional[str]      = None
     phone:               Optional[str]        = None
     age:                 Optional[int]        = None   # computed property — read only
     sex:                 Sex
     date_of_birth:       Optional[date]       = None
     patient_type:        str
     status:              PatientStatus
-    diagnosis_date:      Optional[date]       = None
-    viral_load:          Optional[str]        = None
-    last_viral_load_date: Optional[date]      = None
-    treatment_start_date: Optional[date]      = None
-    treatment_regimen:   Optional[str]        = None
-    medical_history:     Optional[str]        = None
-    allergies:           Optional[str]        = None
-    notes:               Optional[str]        = None
+    accepts_messaging:   bool
+    address_line:        Optional[str]        = None
+    city:                Optional[str]        = None
+    district:            Optional[str]        = None
+    region:              Optional[str]        = None
+    country:             Optional[str]        = None
+    emergency_contact_name: Optional[str]     = None
+    emergency_contact_phone: Optional[str]    = None
+    emergency_contact_relationship: Optional[str] = None
+    identifiers:         List[PatientIdentifierSchema] = []
     facility:            Optional[FacilityInfoSchema] = None
     created_by:          Optional[UserInfoSchema]     = None
     updated_by:          Optional[UserInfoSchema]     = None
@@ -636,20 +862,29 @@ class RegularPatientResponseSchema(BaseModel):
         return cls(
             id=patient.id,
             name=patient.name,
+            first_name=patient.first_name,
+            last_name=patient.last_name,
+            preferred_name=patient.preferred_name,
+            medical_record_number=patient.medical_record_number,
             phone=patient.phone,
             age=patient.age,   # computed property
             sex=patient.sex,
             date_of_birth=patient.date_of_birth,
             patient_type=patient.patient_type,
             status=patient.status,
-            diagnosis_date=getattr(patient, "diagnosis_date", None),
-            viral_load=getattr(patient, "viral_load", None),
-            last_viral_load_date=getattr(patient, "last_viral_load_date", None),
-            treatment_start_date=getattr(patient, "treatment_start_date", None),
-            treatment_regimen=getattr(patient, "treatment_regimen", None),
-            medical_history=getattr(patient, "medical_history", None),
-            allergies=getattr(patient, "allergies", None),
-            notes=getattr(patient, "notes", None),
+            accepts_messaging=patient.accepts_messaging,
+            address_line=patient.address_line,
+            city=patient.city,
+            district=patient.district,
+            region=patient.region,
+            country=patient.country,
+            emergency_contact_name=patient.emergency_contact_name,
+            emergency_contact_phone=patient.emergency_contact_phone,
+            emergency_contact_relationship=patient.emergency_contact_relationship,
+            identifiers=[
+                PatientIdentifierSchema.model_validate(i)
+                for i in getattr(patient, "identifiers", [])
+            ],
             facility=facility_info,
             created_by=created_by_info,
             updated_by=updated_by_info,
@@ -808,8 +1043,6 @@ class ConvertToRegularPatientSchema(BaseModel):
 
     outcome:          PregnancyOutcome
     actual_delivery_date: Optional[date] = None # defaults to today if omitted
-    treatment_regimen: Optional[str]     = None
-    notes:            Optional[str]      = None
 
     @field_validator("actual_delivery_date")
     @classmethod
@@ -1186,3 +1419,69 @@ class PatientReminderResponseSchema(PatientReminderBaseSchema):
     created_at: datetime
     updated_at: datetime
     model_config = {"from_attributes": True}
+
+
+class FacilityNotificationUpdateSchema(BaseModel):
+    status: Optional[str] = None
+    assigned_to_id: Optional[uuid.UUID] = None
+
+    @field_validator("status")
+    @classmethod
+    def validate_status(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        if v not in {"unread", "acknowledged", "in_progress", "resolved", "dismissed"}:
+            raise ValueError("Invalid notification status.")
+        return v
+
+
+class FacilityNotificationResponseSchema(BaseModel):
+    id: uuid.UUID
+    facility_id: uuid.UUID
+    patient_id: uuid.UUID
+    reminder_id: Optional[uuid.UUID] = None
+    title: str
+    message: str
+    notification_type: str
+    priority: str
+    status: str
+    action_label: Optional[str] = None
+    action_url: Optional[str] = None
+    due_date: Optional[date] = None
+    patient_phone: Optional[str] = None
+    patient_name: Optional[str] = None
+    created_at: datetime
+    acknowledged_at: Optional[datetime] = None
+    resolved_at: Optional[datetime] = None
+    assigned_to: Optional[UserInfoSchema] = None
+
+    model_config = {"from_attributes": True}
+
+    @classmethod
+    def from_notification(cls, notification) -> "FacilityNotificationResponseSchema":
+        assigned_to = None
+        if getattr(notification, "assigned_to", None):
+            assigned_to = UserInfoSchema(
+                id=notification.assigned_to.id,
+                name=notification.assigned_to.full_name or notification.assigned_to.username,
+            )
+        return cls(
+            id=notification.id,
+            facility_id=notification.facility_id,
+            patient_id=notification.patient_id,
+            reminder_id=notification.reminder_id,
+            title=notification.title,
+            message=notification.message,
+            notification_type=notification.notification_type,
+            priority=notification.priority,
+            status=notification.status,
+            action_label=notification.action_label,
+            action_url=notification.action_url,
+            due_date=notification.due_date,
+            patient_phone=notification.patient_phone,
+            patient_name=getattr(getattr(notification, "patient", None), "name", None),
+            created_at=notification.created_at,
+            acknowledged_at=notification.acknowledged_at,
+            resolved_at=notification.resolved_at,
+            assigned_to=assigned_to,
+        )

@@ -43,7 +43,7 @@ async def create_child(
     The six-month checkup date is automatically calculated from date_of_birth.
     `pregnancy_id` is taken from the URL path — do not include it in the body.
     """
-    service = PatientService(db)
+    service = PatientService(db, current_user)
     try:
         # Inject the path param so the service has it.
         child_data.pregnancy_id = pregnancy_id
@@ -91,7 +91,7 @@ async def list_pregnancy_children(
     returned here. To list all children across a mother's entire history,
     use GET /patients/pregnant/{patient_id}/children.
     """
-    service = PatientService(db)
+    service = PatientService(db, current_user)
     try:
         children = await service.list_pregnancy_children(pregnancy_id)
         return [ChildResponseSchema.from_child(c) for c in children]
@@ -131,7 +131,7 @@ async def list_mother_children(
     Useful for a full lifetime view of a patient's children. For children
     from a specific pregnancy, use GET /pregnancies/{pregnancy_id}/children.
     """
-    service = PatientService(db)
+    service = PatientService(db, current_user)
     try:
         children = await service.list_mother_children(patient_id)
         return [ChildResponseSchema.from_child(c) for c in children]
@@ -169,9 +169,13 @@ async def update_child(
     Used to record six-month checkup completion, Hep B antibody test results,
     and other post-birth follow-up data.
     """
-    service = PatientService(db)
+    service = PatientService(db, current_user)
     try:
-        child = await service.update_child(child_id, update_data)
+        child = await service.update_child(
+            child_id,
+            update_data,
+            updated_by_id=current_user.id,
+        )
 
         logger.log_info({
             "event": "child_updated",

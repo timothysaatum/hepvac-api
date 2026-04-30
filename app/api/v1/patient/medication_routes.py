@@ -28,7 +28,7 @@ async def create_prescription(
     current_user: User = Depends(require_staff_or_admin()),
 ):
     """Create prescription for patient (Staff only)."""
-    service = PatientService(db)
+    service = PatientService(db, current_user)
     try:
 
         prescription_data.patient_id = patient_id
@@ -77,7 +77,7 @@ async def list_patient_prescriptions(
     active_only: bool = False,
 ):
     """List prescriptions for patient (Staff only)."""
-    service = PatientService(db)
+    service = PatientService(db, current_user)
     try:
         prescriptions = await service.list_patient_prescriptions(
             patient_id, active_only
@@ -117,7 +117,7 @@ async def update_prescription(
     current_user: User = Depends(require_staff_or_admin()),
 ):
     """Update prescription (Staff only)."""
-    service = PatientService(db)
+    service = PatientService(db, current_user)
     try:
         prescription = await service.update_prescription(prescription_id, update_data)
 

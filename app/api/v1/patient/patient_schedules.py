@@ -28,7 +28,7 @@ async def create_medication_schedule(
     current_user: User = Depends(require_staff_or_admin()),
 ):
     """Create medication schedule for patient (Staff only)."""
-    service = PatientService(db)
+    service = PatientService(db, current_user)
     try:
         schedule_data.patient_id = patient_id
         schedule = await service.create_medication_schedule(schedule_data)
@@ -76,7 +76,7 @@ async def list_patient_medication_schedules(
     active_only: bool = False,
 ):
     """List medication schedules for patient (Staff only)."""
-    service = PatientService(db)
+    service = PatientService(db, current_user)
     try:
         schedules = await service.list_patient_medication_schedules(
             patient_id, active_only
@@ -116,7 +116,7 @@ async def update_medication_schedule(
     current_user: User = Depends(require_staff_or_admin()),
 ):
     """Update medication schedule (Staff only)."""
-    service = PatientService(db)
+    service = PatientService(db, current_user)
     try:
         schedule = await service.update_medication_schedule(schedule_id, update_data)
 

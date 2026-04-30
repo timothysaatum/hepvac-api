@@ -1,8 +1,12 @@
-import nest_asyncio
 import asyncio
-
-nest_asyncio.apply()
 from logging.config import fileConfig
+
+try:
+    import nest_asyncio
+except ModuleNotFoundError:
+    nest_asyncio = None
+else:
+    nest_asyncio.apply()
 
 from sqlalchemy import pool
 from sqlalchemy.engine import Connection

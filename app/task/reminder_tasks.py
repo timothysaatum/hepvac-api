@@ -358,6 +358,7 @@ async def send_reminder_sms(
     if result.get("success"):
         reminder.status  = ReminderStatus.SENT
         reminder.sent_at = datetime.now(timezone.utc)
+        await _create_facility_call_notification(db, reminder)
         await db.flush()
         logger.info(f"Reminder {reminder_id} SMS sent successfully")
         return {"success": True, "reminder_id": reminder_id}
@@ -371,6 +372,51 @@ async def send_reminder_sms(
         error = result.get("error", "Unknown Arkesel error")
         logger.error(f"Reminder {reminder_id} SMS failed: {error}")
         raise RuntimeError(error)  # Triggers QueueManager retry logic
+
+
+async def _create_facility_call_notification(
+    db: AsyncSession,
+    reminder: PatientReminder,
+) -> None:
+    """Create one facility call work item for a sent patient reminder."""
+    from app.models.patient_model import FacilityNotification, Patient
+
+    patient = reminder.patient
+    if not patient:
+        patient = (await db.execute(
+            select(Patient).where(Patient.id == reminder.patient_id)
+        )).scalar_one_or_none()
+    if not patient or not patient.facility_id:
+        return
+
+    existing = (await db.execute(
+        select(FacilityNotification.id).where(
+            FacilityNotification.reminder_id == reminder.id
+        )
+    )).scalar_one_or_none()
+    if existing:
+        return
+
+    priority = "urgent" if reminder.scheduled_date <= datetime.now(timezone.utc).date() else "high"
+    reminder_type = getattr(reminder.reminder_type, "value", reminder.reminder_type)
+    patient_type = getattr(patient.patient_type, "value", patient.patient_type)
+    db.add(FacilityNotification(
+        facility_id=patient.facility_id,
+        patient_id=patient.id,
+        reminder_id=reminder.id,
+        title="Call patient for reminder follow-up",
+        message=(
+            f"{patient.name} received a {str(reminder_type).replace('_', ' ')} "
+            "reminder. Please call to confirm they understood and can attend."
+        ),
+        notification_type="patient_reminder_call",
+        priority=priority,
+        status="unread",
+        action_label="Open patient",
+        action_url=f"/patients/{patient.id}?type={str(patient_type).lower()}",
+        due_date=reminder.scheduled_date,
+        patient_phone=patient.phone,
+    ))
 
 
 # ============================================================================

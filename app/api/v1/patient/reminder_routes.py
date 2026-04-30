@@ -30,7 +30,7 @@ async def create_reminder(
     current_user: User = Depends(require_staff_or_admin()),
 ):
     """Create reminder for patient (Staff only)."""
-    service = PatientService(db)
+    service = PatientService(db, current_user)
     try:
         reminder_data.patient_id = patient_id
         reminder = await service.create_reminder(reminder_data)
@@ -79,7 +79,7 @@ async def list_patient_reminders(
     pending_only: bool = False,
 ):
     """List reminders for patient (Staff only). Use /paginated for large lists."""
-    service = PatientService(db)
+    service = PatientService(db, current_user)
     try:
         reminders = await service.list_patient_reminders(patient_id, pending_only)
         return [
@@ -129,7 +129,7 @@ async def list_patient_reminders_paginated(
     
     Smart Ordering: Pending reminders appear first, sorted by scheduled_date.
     """
-    service = PatientService(db)
+    service = PatientService(db, current_user)
     try:
         result = await service.list_patient_reminders_paginated(
             patient_id=patient_id,
@@ -177,7 +177,7 @@ async def update_reminder(
     current_user: User = Depends(require_staff_or_admin()),
 ):
     """Update reminder (Staff only)."""
-    service = PatientService(db)
+    service = PatientService(db, current_user)
     try:
         reminder = await service.update_reminder(reminder_id, update_data)
 
