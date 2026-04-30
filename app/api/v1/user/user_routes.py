@@ -12,6 +12,7 @@ from sqlalchemy.orm import selectinload
 from sqlalchemy import select
 from app.core.security import get_current_user, super_admin_login
 from app.core.sessions import SessionManager, TokenManager
+from app.core.settings_service import SettingsService
 from app.middlewares.auth_middleware import set_refresh_token_cookie
 from app.middlewares.security_middleware import DeviceTrustService
 from app.models.rbac import Role
@@ -115,7 +116,6 @@ async def login_user(
         HTTPException: If authentication fails or device is not trusted
     """
     user_service = UserService(db)
-    print(request.headers)
     device_data = SessionManager.extract_device_info(request)
     user_agent = device_data["user_agent"]
     ip_address = device_data["client_ip"]
@@ -148,9 +148,10 @@ async def login_user(
         # Initialize device trust variables
         is_new = False
         device_checked = False
+        app_settings = await SettingsService.get_settings(db)
 
         # Step 2: Check device trust AFTER successful authentication (skip for admins)
-        if not user.has_role("admin"):
+        if app_settings.require_device_approval and not user.has_role("admin"):
             try:
                 is_trusted, message, is_new = (
                     await DeviceTrustService.check_and_register_device(
@@ -417,13 +418,20 @@ async def refresh_token(
             )
 
         # Create new session for token refresh
+        app_settings = await SettingsService.get_settings(db)
         session = await SessionManager.create_session(
-            db=db, user_id=user.id, request=request, login_method="refresh_token"
+            db=db,
+            user_id=user.id,
+            request=request,
+            login_method="refresh_token",
+            timeout_minutes=app_settings.session_timeout_minutes,
         )
 
         # Create new access token with session reference
         new_access_token = TokenManager.create_access_token(
-            data={"sub": str(user.id)}, session_id=session.id
+            data={"sub": str(user.id)},
+            expires_delta=timedelta(minutes=app_settings.session_timeout_minutes),
+            session_id=session.id,
         )
 
         # Update refresh token usage stats (reuse existing token)

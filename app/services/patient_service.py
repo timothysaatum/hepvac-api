@@ -8,6 +8,7 @@ from typing import List, Optional
 import uuid
 
 from fastapi import HTTPException, status
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.patient_model import (
@@ -194,6 +195,73 @@ class PatientService:
         result.apply_abnormal_indicator()
         if result.is_abnormal and result.abnormal_flag == LabResultFlag.NORMAL:
             result.abnormal_flag = LabResultFlag.ABNORMAL
+
+    def _add_months(self, start: date, months: int) -> date:
+        month = start.month - 1 + months
+        year = start.year + month // 12
+        month = month % 12 + 1
+        month_days = [
+            31,
+            29 if year % 4 == 0 and (year % 100 != 0 or year % 400 == 0) else 28,
+            31,
+            30,
+            31,
+            30,
+            31,
+            31,
+            30,
+            31,
+            30,
+            31,
+        ]
+        return date(year, month, min(start.day, month_days[month - 1]))
+
+    def _delivery_date_range(
+        self,
+        delivery_date_field: Optional[str],
+        delivery_window_days: Optional[int],
+        delivery_window_months: Optional[int],
+    ) -> tuple[Optional[date], Optional[date]]:
+        if not delivery_date_field and delivery_window_days is None and delivery_window_months is None:
+            return None, None
+
+        if delivery_date_field not in {"expected", "actual"}:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="delivery_date_field must be either 'expected' or 'actual'.",
+            )
+        if delivery_window_days is not None and delivery_window_months is not None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Use either delivery_window_days or delivery_window_months, not both.",
+            )
+        if delivery_window_days is None and delivery_window_months is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Provide delivery_window_days or delivery_window_months.",
+            )
+        if delivery_window_days is not None and not (0 <= delivery_window_days <= 366):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="delivery_window_days must be between 0 and 366.",
+            )
+        if delivery_window_months is not None and not (0 <= delivery_window_months <= 24):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="delivery_window_months must be between 0 and 24.",
+            )
+
+        today = date.today()
+        if delivery_window_days is not None:
+            span = timedelta(days=delivery_window_days)
+            if delivery_date_field == "expected":
+                return today, today + span
+            return today - span, today
+
+        months = delivery_window_months or 0
+        if delivery_date_field == "expected":
+            return today, self._add_months(today, months)
+        return self._add_months(today, -months), today
 
     def _closed_pregnancy_grace_deadline(self, pregnancy: Pregnancy) -> Optional[date]:
         if pregnancy.is_active or pregnancy.actual_delivery_date is None:
@@ -633,6 +701,9 @@ class PatientService:
         facility_id: Optional[uuid.UUID] = None,
         patient_type: Optional[str] = None,
         patient_status: Optional[str] = None,
+        delivery_date_field: Optional[str] = None,
+        delivery_window_days: Optional[int] = None,
+        delivery_window_months: Optional[int] = None,
         page: int = 1,
         page_size: int = 10,
     ) -> tuple[List, int]:
@@ -661,12 +732,21 @@ class PatientService:
                     detail=f"Invalid patient_status. Must be one of: {[s.value for s in PatientStatus]}.",
                 )
 
+        delivery_start_date, delivery_end_date = self._delivery_date_range(
+            delivery_date_field,
+            delivery_window_days,
+            delivery_window_months,
+        )
+
         facility_id = self._scope_facility_filter(facility_id)
         skip = (page - 1) * page_size
         return await self.repo.list_patients_paginated(
             facility_id=facility_id,
             patient_type=patient_type,
             patient_status=patient_status,
+            delivery_date_field=delivery_date_field,
+            delivery_start_date=delivery_start_date,
+            delivery_end_date=delivery_end_date,
             skip=skip,
             limit=page_size,
         )
@@ -1162,9 +1242,19 @@ class PatientService:
             )
         self._assert_facility_access(patient.facility_id)
         allergy_dict = allergy_data.model_dump(exclude={"id"})
+        allergy_dict["allergen"] = allergy_dict["allergen"].strip()
         allergy_dict["patient_id"] = patient_id
         allergy_dict["recorded_by_id"] = recorded_by_id
-        return await self.repo.create_patient_allergy(PatientAllergy(**allergy_dict))
+        try:
+            return await self.repo.create_patient_allergy(PatientAllergy(**allergy_dict))
+        except IntegrityError as e:
+            await self.db.rollback()
+            if "uq_patient_allergy_allergen" in str(e):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="This allergy is already recorded for the patient.",
+                )
+            raise
 
     async def list_patient_allergies(
         self, patient_id: uuid.UUID, active_only: bool = False

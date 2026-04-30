@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.dependencies import get_db
 from app.core.sessions import SessionManager, TokenManager
+from app.core.settings_service import SettingsService
 from app.core.utils import logger
 from app.models.rbac import Role
 from app.models.user_model import User
@@ -73,10 +74,13 @@ async def handle_failed_login(
 ) -> None:
     """Handle failed login attempt with account locking"""
     try:
-        user.update_login_attempts()
+        app_settings = await SettingsService.get_settings(db)
 
-        if user.has_exhausted_max_login_attempts:
-            user.suspend_user()
+        if not user.is_suspended and user.login_attempts < app_settings.max_login_attempts:
+            user.login_attempts += 1
+
+        if user.login_attempts >= app_settings.max_login_attempts:
+            user.is_suspended = True
             
         await db.commit()
 
@@ -87,6 +91,7 @@ async def handle_failed_login(
                 "ip_address": ip_address,
                 "user_agent": user_agent,
                 "failed_attempts": user.login_attempts,
+                "max_login_attempts": app_settings.max_login_attempts,
                 "account_locked": user.is_suspended,
             }
         )

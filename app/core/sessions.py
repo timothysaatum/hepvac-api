@@ -209,6 +209,7 @@ class SessionManager:
         user_id: UUID,
         request: Request,
         login_method: str = "password",
+        timeout_minutes: Optional[int] = None,
     ) -> UserSession:
         """Create a new user session with enhanced tracking"""
 
@@ -226,7 +227,9 @@ class SessionManager:
             ).hexdigest()[:16],
             ip_address=device_info.get("client_ip"),
             login_method=login_method,
-            expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
+            expires_at=datetime.now(timezone.utc) + timedelta(
+                minutes=timeout_minutes or ACCESS_TOKEN_EXPIRE_MINUTES
+            ),
         )
 
         db.add(session)

@@ -1,6 +1,8 @@
 from typing import List, Optional, Tuple
+from datetime import timedelta
 import uuid
 from fastapi import Request, Response, HTTPException, status
+from app.core.settings_service import SettingsService
 from app.core.sessions import SessionManager, TokenManager
 from app.middlewares.auth_middleware import authenticate_user, set_refresh_token_cookie
 from app.models.user_model import User
@@ -108,16 +110,20 @@ class UserService:
         if request is None:
             raise ValueError("Request object is required for session creation")
 
+        app_settings = await SettingsService.get_settings(self.db)
         session = await SessionManager.create_session(
             db=self.db,
             user_id=user.id,
             request=request,
-            login_method="password"
+            login_method="password",
+            timeout_minutes=app_settings.session_timeout_minutes,
         )
 
         # Create access token with session reference
         access_token = TokenManager.create_access_token(
-            data={"sub": str(user.id)}, session_id=session.id
+            data={"sub": str(user.id)},
+            expires_delta=timedelta(minutes=app_settings.session_timeout_minutes),
+            session_id=session.id,
         )
 
         # Create refresh token

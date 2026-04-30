@@ -5,10 +5,9 @@ from app.core.permission_checker import require_admin
 from app.core.security import get_current_user
 from app.core.settings import SystemStatus
 from app.core.settings_schemas import SettingPublic, SettingResponse, SettingUpdate, SystemStatusUpdate
-from app.core.settings_service import SettingsService, _settings_cache
+from app.core.settings_service import SettingsService
 from app.api.dependencies import get_db
 import logging
-from app.core.cache import cached
 
 
 from app.models.user_model import User
@@ -18,7 +17,6 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/settings", tags=["Settings"])
 
 
-@cached(ttl=300, key_prefix="settings")
 @router.get("/public", response_model=SettingPublic)
 async def get_public_settings(
         db: AsyncSession = Depends(get_db)
@@ -43,7 +41,6 @@ async def get_public_settings(
         )
 
 
-@cached(ttl=300, key_prefix="settings")
 @router.get("", response_model=SettingResponse)
 async def get_settings(
     current_user: Annotated[User, Depends(get_current_user)],
@@ -88,7 +85,6 @@ async def update_settings(
     - All changes are logged with user ID
     - Cache is automatically invalidated
     """
-    print(f"current_user: {current_user.id}")
     try:
         settings = await SettingsService.update_settings(
             db=db,
@@ -115,7 +111,7 @@ async def update_settings(
 @router.post("/system-status", response_model=SettingResponse)
 async def set_system_status(
     status_update: SystemStatusUpdate,
-    current_user: Annotated[User, Depends(require_admin)],
+    current_user: Annotated[User, Depends(require_admin())],
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -169,7 +165,7 @@ async def set_system_status(
 
 @router.post("/invalidate-cache")
 async def invalidate_settings_cache(
-    current_user: Annotated[User, Depends(require_admin)],
+    current_user: Annotated[User, Depends(require_admin())],
 ):
     """
     Manually invalidate settings cache.
@@ -213,7 +209,7 @@ async def settings_health_check(db: AsyncSession = Depends(get_db)):
             "settings_exist": True,
             "system_accessible": is_accessible,
             "system_status": settings.system_status,
-            "cache_active": _settings_cache is not None
+            "cache_active": SettingsService.is_cache_active()
         }
     except Exception as e:
         logger.error(f"Settings health check failed: {e}")

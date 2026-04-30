@@ -9,6 +9,7 @@ import logging
 
 from app.core.settings import SystemStatus
 from app.core.settings_service import SettingsService
+from app.db.session import AsyncSessionLocal
 
 logger = logging.getLogger(__name__)
 
@@ -63,43 +64,35 @@ async def settings_middleware(request: Request, call_next):
     Exempts health checks, the login endpoint, docs, and static files so
     administrators can always reach the system even during maintenance.
     """
-    exempt_paths = [
+    exact_exempt_paths = {
         "/api/v1/health",
         "/api/v1/settings/public",
         "/api/v1/settings/health",
         "/api/v1/auth/login",
+        "/api/v1/users/login",
+        "/api/v1/users/superadmin-login",
         "/speed.hepvac.com",
         "/",
         "/docs",
         "/redoc",
         "/openapi.json",
-    ]
+    }
 
     path = request.url.path
 
-    if any(path.startswith(exempt) for exempt in exempt_paths):
+    if path in exact_exempt_paths:
         return await call_next(request)
 
     if path.startswith("/static"):
         return await call_next(request)
 
     try:
-        # middleware on every request. This bypasses FastAPI's dependency
-        # injection lifecycle and creates a raw session that is NOT managed by
-        # the connection pool's request-scoped cleanup. Under load this can
-        # exhaust the connection pool.
-        #
-        # The correct pattern is to use the cache-only path here (use_cache=True)
-        # which returns the in-memory cached settings object without touching
-        # the database at all. The cache is warmed up during startup by
-        # initialize_settings(). On a cache miss the settings service will
-        # open its own session internally via the configured session factory.
-        #
-        # This makes the hot path (99% of requests) a pure in-memory lookup
-        # with zero DB interaction.
         from app.core.settings_service import _settings_cache
 
         app_settings = _settings_cache
+        if app_settings is None:
+            async with AsyncSessionLocal() as db:
+                app_settings = await SettingsService.get_settings(db, use_cache=True)
 
         if app_settings and app_settings.system_status != SystemStatus.ACTIVE.value:
             logger.warning(

@@ -596,8 +596,21 @@ async def create_patient_allergy(
             recorded_by_id=current_user.id,
         )
         return PatientAllergySchema.model_validate(allergy)
+    except HTTPException:
+        raise
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception as e:
+        logger.log_error({
+            "event": "create_patient_allergy_error",
+            "patient_id": str(patient_id),
+            "error": str(e),
+            "user_id": str(current_user.id),
+        }, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An error occurred while recording the allergy.",
+        )
 
 
 @router.patch(
@@ -615,8 +628,21 @@ async def update_patient_allergy(
     try:
         allergy = await service.update_patient_allergy(allergy_id, update_data)
         return PatientAllergySchema.model_validate(allergy)
+    except HTTPException:
+        raise
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception as e:
+        logger.log_error({
+            "event": "update_patient_allergy_error",
+            "allergy_id": str(allergy_id),
+            "error": str(e),
+            "user_id": str(current_user.id),
+        }, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An error occurred while updating the allergy.",
+        )
 
 @router.get(
     "/{patient_id}",
@@ -765,6 +791,9 @@ async def list_patients(
     facility_id: Optional[uuid.UUID] = None,
     patient_type: Optional[str] = None,
     patient_status: Optional[str] = None,
+    delivery_date_field: Optional[str] = None,
+    delivery_window_days: Optional[int] = None,
+    delivery_window_months: Optional[int] = None,
 ):
     """Paginated compact list of patients with optional filters."""
     try:
@@ -774,6 +803,9 @@ async def list_patients(
             facility_id=facility_id,
             patient_type=patient_type,
             patient_status=patient_status,
+            delivery_date_field=delivery_date_field,
+            delivery_window_days=delivery_window_days,
+            delivery_window_months=delivery_window_months,
             page=pagination.page,
             page_size=pagination.page_size,
         )
@@ -833,6 +865,9 @@ async def list_patients(
                 "facility_id": str(facility_id) if facility_id else None,
                 "patient_type": patient_type,
                 "patient_status": patient_status,
+                "delivery_date_field": delivery_date_field,
+                "delivery_window_days": delivery_window_days,
+                "delivery_window_months": delivery_window_months,
             },
         })
 

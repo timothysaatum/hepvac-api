@@ -158,9 +158,8 @@ class SettingsService:
         try:
             await db.commit()
             await db.refresh(settings)
-            
-            # Invalidate cache
-            SettingsService.invalidate_cache()
+
+            SettingsService.refresh_cache(settings)
             
             logger.info(
                 f"Settings updated by user {user_id}. "
@@ -210,15 +209,22 @@ class SettingsService:
         
         await db.commit()
         await db.refresh(settings)
-        
-        # Invalidate cache
-        SettingsService.invalidate_cache()
+
+        SettingsService.refresh_cache(settings)
         
         logger.warning(
             f"System status changed to {status.value} by user {user_id}"
         )
         
         return settings
+
+    @staticmethod
+    def refresh_cache(settings: Setting) -> None:
+        """Store the latest settings in the local process cache."""
+        global _settings_cache, _cache_timestamp
+        _settings_cache = settings
+        _cache_timestamp = datetime.utcnow()
+        logger.debug("Settings cache refreshed")
     
     @staticmethod
     def invalidate_cache():
@@ -227,6 +233,11 @@ class SettingsService:
         _settings_cache = None
         _cache_timestamp = None
         logger.debug("Settings cache invalidated")
+
+    @staticmethod
+    def is_cache_active() -> bool:
+        """Return whether the local settings cache currently has a value."""
+        return _settings_cache is not None
     
     @staticmethod
     async def get_public_settings(db: AsyncSession) -> dict:

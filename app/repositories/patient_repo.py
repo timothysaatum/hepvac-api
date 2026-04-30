@@ -2,7 +2,7 @@
 Patient repository — data access layer.
 """
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Optional, List, Sequence
 import uuid
 
@@ -270,6 +270,9 @@ class PatientRepository:
         facility_id: Optional[uuid.UUID] = None,
         patient_type: Optional[str] = None,
         patient_status: Optional[str] = None,
+        delivery_date_field: Optional[str] = None,
+        delivery_start_date: Optional[date] = None,
+        delivery_end_date: Optional[date] = None,
         skip: int = 0,
         limit: int = 10,
     ) -> tuple[List[Patient], int]:
@@ -300,6 +303,21 @@ class PatientRepository:
             base_query = base_query.where(Patient.patient_type == patient_type)
         if patient_status:
             base_query = base_query.where(Patient.status == patient_status)
+        if delivery_date_field and delivery_start_date and delivery_end_date:
+            date_column = (
+                Pregnancy.actual_delivery_date
+                if delivery_date_field == "actual"
+                else Pregnancy.expected_delivery_date
+            )
+            pregnancy_query = select(Pregnancy.patient_id).where(
+                date_column >= delivery_start_date,
+                date_column <= delivery_end_date,
+            )
+            if delivery_date_field == "expected":
+                pregnancy_query = pregnancy_query.where(Pregnancy.is_active == True)
+            else:
+                pregnancy_query = pregnancy_query.where(Pregnancy.is_active == False)
+            base_query = base_query.where(Patient.id.in_(pregnancy_query))
 
         base_query = base_query.order_by(Patient.created_at.desc())
 
