@@ -3,7 +3,7 @@ Patient service — business logic layer.
 The service layer orchestrates complex operations that may involve multiple repository calls, transactions, and business rules. It owns the transaction
 """
 
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import List, Optional
 import uuid
 
@@ -47,6 +47,7 @@ from app.schemas.patient_schemas import (
     FacilityNotificationUpdateSchema,
     DiagnosisCreateSchema,
     DiagnosisUpdateSchema,
+    PregnancyOutcome,
 )
 from app.repositories.patient_repo import PatientRepository
 from app.services.reminder_schedule import build_reminder_rows, cancel_pending_reminders
@@ -56,6 +57,8 @@ from app.models.user_model import User
 
 class PatientService:
     """Service layer for patient business logic."""
+
+    CLOSED_PREGNANCY_CHILD_ENTRY_GRACE_DAYS = 7
 
     def __init__(self, db: AsyncSession, current_user: Optional[User] = None):
         self.db = db
@@ -157,6 +160,44 @@ class PatientService:
             return
         facility_id = await self.repo.get_diagnosis_facility_id(diagnosis_id)
         self._assert_facility_access(facility_id)
+
+    def _closed_pregnancy_grace_deadline(self, pregnancy: Pregnancy) -> Optional[date]:
+        if pregnancy.is_active or pregnancy.actual_delivery_date is None:
+            return None
+        return pregnancy.actual_delivery_date + timedelta(
+            days=self.CLOSED_PREGNANCY_CHILD_ENTRY_GRACE_DAYS
+        )
+
+    def _is_closed_pregnancy_in_grace(self, pregnancy: Pregnancy) -> bool:
+        deadline = self._closed_pregnancy_grace_deadline(pregnancy)
+        return deadline is not None and date.today() <= deadline
+
+    def _assert_child_can_be_added_to_pregnancy(self, pregnancy: Pregnancy) -> None:
+        if pregnancy.is_active or self._is_admin_context():
+            return
+
+        if pregnancy.outcome != PregnancyOutcome.LIVE_BIRTH:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Children can only be added to a closed pregnancy when the outcome was live birth.",
+            )
+
+        if not self._is_closed_pregnancy_in_grace(pregnancy):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=(
+                    "The child registration window for this closed pregnancy has ended. "
+                    "Ask an admin to add or correct birth records."
+                ),
+            )
+
+    def _assert_closed_pregnancy_edit_allowed(self, pregnancy: Pregnancy) -> None:
+        if pregnancy.is_active or self._is_admin_context():
+            return
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Closed pregnancy details can only be modified by an admin.",
+        )
 
     # =========================================================================
     # Pregnant patient
@@ -698,7 +739,12 @@ class PatientService:
         pregnancy_id: uuid.UUID,
         update_data: PregnancyUpdateSchema,
     ) -> Pregnancy:
-        """Update clinical data on an active pregnancy episode."""
+        """Update pregnancy episode data.
+
+        Staff can update active pregnancies. Closed pregnancy corrections are
+        intentionally admin-only because they alter finalized birth/outcome
+        documentation.
+        """
         pregnancy = await self.repo.get_pregnancy_by_id(pregnancy_id)
         if not pregnancy:
             raise HTTPException(
@@ -706,11 +752,7 @@ class PatientService:
                 detail="Pregnancy not found.",
             )
         await self._assert_pregnancy_access(pregnancy_id)
-        if not pregnancy.is_active:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Cannot update a closed pregnancy episode.",
-            )
+        self._assert_closed_pregnancy_edit_allowed(pregnancy)
 
         update_dict = update_data.model_dump(exclude_unset=True)
 
@@ -812,6 +854,7 @@ class PatientService:
                 detail="Pregnancy not found.",
             )
         await self._assert_pregnancy_access(child_data.pregnancy_id)
+        self._assert_child_can_be_added_to_pregnancy(pregnancy)
 
         child_dict = child_data.model_dump()
         child_dict["six_month_checkup_date"] = (
@@ -867,6 +910,19 @@ class PatientService:
             )
         await self._assert_child_access(child_id)
         update_dict = update_data.model_dump(exclude_unset=True)
+
+        pregnancy = await self.repo.get_pregnancy_by_id(child.pregnancy_id)
+        if pregnancy and not pregnancy.is_active and not self._is_admin_context():
+            birth_detail_fields = {"name", "sex", "notes"}
+            if birth_detail_fields.intersection(update_dict):
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail=(
+                        "Birth details for a closed pregnancy can only be corrected by an admin. "
+                        "Six-month checkup and Hep B monitoring fields remain editable."
+                    ),
+                )
+
         # Stamp the audit field regardless of whether the caller included it
         # in the schema body — always prefer the injected auth-context value.
         if updated_by_id is not None:
@@ -885,7 +941,6 @@ class PatientService:
 
         # Regenerate checkup reminders when the date changes and checkup isn't done yet
         if checkup_changed and updated_child.six_month_checkup_date and not updated_child.six_month_checkup_completed:
-            pregnancy = await self.repo.get_pregnancy_by_id(updated_child.pregnancy_id)
             patient_name = "Dear patient"
             if pregnancy:
                 patient = await self.repo.get_pregnant_patient_by_id(pregnancy.patient_id)
