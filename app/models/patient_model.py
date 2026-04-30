@@ -47,6 +47,9 @@ from app.db.base import Base
 from app.schemas.patient_schemas import (
     DoseType,
     HepBTestResult,
+    LabResultFlag,
+    LabTestStatus,
+    LabTestType,
     PatientStatus,
     PatientType,
     PregnancyOutcome,
@@ -54,6 +57,9 @@ from app.schemas.patient_schemas import (
     ReminderType,
     Sex,
     hep_b_test_result_enum,
+    lab_result_flag_enum,
+    lab_test_status_enum,
+    lab_test_type_enum,
     pregnancy_outcome_enum,
     dose_type_enum,
     patient_status_enum,
@@ -246,6 +252,12 @@ class Patient(Base):
         cascade="all, delete-orphan",
         lazy="noload",
     )
+    lab_tests: Mapped[List["PatientLabTest"]] = relationship(
+        "PatientLabTest",
+        back_populates="patient",
+        cascade="all, delete-orphan",
+        lazy="noload",
+    )
     medication_schedules: Mapped[List["MedicationSchedule"]] = relationship(
         "MedicationSchedule",
         back_populates="patient",
@@ -420,6 +432,219 @@ class Diagnosis(Base):
     def __str__(self) -> str:
         
         return str(self.patient_id)
+
+
+# ============================================================================
+# Patient Lab Tests
+# ============================================================================
+
+
+class PatientLabTest(Base):
+    """Patient-level lab order/result container for Hep B, RFT, and LFT tests."""
+
+    __tablename__ = "patient_lab_tests"
+
+    __table_args__ = (
+        CheckConstraint(
+            "reported_at IS NULL OR collected_at IS NULL OR reported_at >= collected_at",
+            name="ck_lab_test_reported_after_collected",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+        index=True,
+    )
+    patient_id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("patients.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    test_type: Mapped[LabTestType] = mapped_column(
+        lab_test_type_enum,
+        nullable=False,
+        index=True,
+    )
+    test_name: Mapped[str] = mapped_column(String(120), nullable=False)
+    status: Mapped[LabTestStatus] = mapped_column(
+        lab_test_status_enum,
+        default=LabTestStatus.ORDERED,
+        nullable=False,
+        index=True,
+    )
+    ordered_by_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    reviewed_by_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    ordered_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+        index=True,
+    )
+    collected_at: Mapped[Optional[datetime]] = mapped_column(
+        TIMESTAMP(timezone=True),
+        nullable=True,
+    )
+    reported_at: Mapped[Optional[datetime]] = mapped_column(
+        TIMESTAMP(timezone=True),
+        nullable=True,
+        index=True,
+    )
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+    patient: Mapped["Patient"] = relationship(
+        "Patient",
+        back_populates="lab_tests",
+        lazy="noload",
+    )
+    ordered_by: Mapped[Optional["User"]] = relationship(
+        "User",
+        foreign_keys=[ordered_by_id],
+        lazy="selectin",
+    )
+    reviewed_by: Mapped[Optional["User"]] = relationship(
+        "User",
+        foreign_keys=[reviewed_by_id],
+        lazy="selectin",
+    )
+    results: Mapped[List["PatientLabResult"]] = relationship(
+        "PatientLabResult",
+        back_populates="lab_test",
+        cascade="all, delete-orphan",
+        order_by="PatientLabResult.component_name",
+        lazy="selectin",
+    )
+
+    @validates("test_name")
+    def validate_test_name(self, key: str, value: str) -> str:
+        if value is None or not str(value).strip():
+            raise ValueError("Lab test name is required.")
+        value = str(value).strip()
+        if len(value) > 120:
+            raise ValueError("Lab test name must not exceed 120 characters.")
+        return value
+
+    def __repr__(self) -> str:
+        return f"<PatientLabTest id={self.id} patient_id={self.patient_id} type={self.test_type}>"
+
+
+class PatientLabResult(Base):
+    """Single measured/qualitative component result under a patient lab test."""
+
+    __tablename__ = "patient_lab_results"
+
+    __table_args__ = (
+        CheckConstraint(
+            "value_numeric IS NOT NULL OR value_text IS NOT NULL",
+            name="ck_lab_result_value_present",
+        ),
+        CheckConstraint(
+            "reference_min IS NULL OR reference_max IS NULL OR reference_min <= reference_max",
+            name="ck_lab_result_reference_range_valid",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+        index=True,
+    )
+    lab_test_id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("patient_lab_tests.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    component_name: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
+    component_code: Mapped[Optional[str]] = mapped_column(String(50), nullable=True, index=True)
+    value_numeric: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 4), nullable=True)
+    value_text: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
+    unit: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+    reference_min: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 4), nullable=True)
+    reference_max: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 4), nullable=True)
+    abnormal_flag: Mapped[LabResultFlag] = mapped_column(
+        lab_result_flag_enum,
+        default=LabResultFlag.NORMAL,
+        nullable=False,
+        index=True,
+    )
+    is_abnormal: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, index=True)
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+    lab_test: Mapped["PatientLabTest"] = relationship(
+        "PatientLabTest",
+        back_populates="results",
+        lazy="noload",
+    )
+
+    @validates("component_name")
+    def validate_component_name(self, key: str, value: str) -> str:
+        if value is None or not str(value).strip():
+            raise ValueError("Lab result component name is required.")
+        value = str(value).strip()
+        if len(value) > 120:
+            raise ValueError("Lab result component name must not exceed 120 characters.")
+        return value
+
+    def apply_abnormal_indicator(self) -> None:
+        """
+        Derive abnormal flag from numeric result and reference range when possible.
+
+        Qualitative results can still be marked manually by setting abnormal_flag
+        or is_abnormal before this method runs.
+        """
+        if self.value_numeric is not None:
+            if self.reference_min is not None and self.value_numeric < self.reference_min:
+                self.abnormal_flag = LabResultFlag.LOW
+                self.is_abnormal = True
+                return
+            if self.reference_max is not None and self.value_numeric > self.reference_max:
+                self.abnormal_flag = LabResultFlag.HIGH
+                self.is_abnormal = True
+                return
+
+        if self.abnormal_flag and self.abnormal_flag != LabResultFlag.NORMAL:
+            self.is_abnormal = True
+            return
+
+        self.abnormal_flag = LabResultFlag.NORMAL
+        self.is_abnormal = bool(self.is_abnormal)
+
+    def __repr__(self) -> str:
+        return f"<PatientLabResult id={self.id} component={self.component_name}>"
 
 
 # ============================================================================

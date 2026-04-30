@@ -6,6 +6,7 @@ Covers: Patient (base), PregnantPatient, RegularPatient, Pregnancy,
 """
 
 from datetime import date, datetime
+from decimal import Decimal
 from enum import Enum
 import re
 from typing import TYPE_CHECKING, Dict, List, Optional
@@ -15,7 +16,7 @@ from pydantic import BaseModel, field_validator, model_validator
 from sqlalchemy.dialects.postgresql import ENUM as PGENUM
 
 if TYPE_CHECKING:
-    from app.models.patient_model import Child, Diagnosis, PregnantPatient, Prescription, RegularPatient
+    from app.models.patient_model import Child, Diagnosis, PatientLabResult, PatientLabTest, PregnantPatient, Prescription, RegularPatient
 
 # ============================================================================
 # Enumerations
@@ -90,6 +91,28 @@ class HepBTestResult(str, Enum):
     PENDING       = "pending"
 
 
+class LabTestType(str, Enum):
+    HEP_B = "hep_b"
+    RFT   = "rft"
+    LFT   = "lft"
+
+
+class LabTestStatus(str, Enum):
+    ORDERED    = "ordered"
+    IN_PROGRESS = "in_progress"
+    COMPLETED  = "completed"
+    CANCELLED  = "cancelled"
+
+
+class LabResultFlag(str, Enum):
+    NORMAL        = "normal"
+    LOW           = "low"
+    HIGH          = "high"
+    CRITICAL_LOW  = "critical_low"
+    CRITICAL_HIGH = "critical_high"
+    ABNORMAL      = "abnormal"
+
+
 # ============================================================================
 # PostgreSQL ENUM column types (reused in ORM model definitions)
 # ============================================================================
@@ -120,6 +143,21 @@ pregnancy_outcome_enum = PGENUM(
 hep_b_test_result_enum = PGENUM(
     HepBTestResult,
     name="hep_b_test_result",
+    create_type=False,
+)
+lab_test_type_enum = PGENUM(
+    LabTestType,
+    name="lab_test_type",
+    create_type=False,
+)
+lab_test_status_enum = PGENUM(
+    LabTestStatus,
+    name="lab_test_status",
+    create_type=False,
+)
+lab_result_flag_enum = PGENUM(
+    LabResultFlag,
+    name="lab_result_flag",
     create_type=False,
 )
 
@@ -1208,6 +1246,212 @@ class DiagnosisResponseSchema(BaseModel):
             is_deleted=diagnosis.is_deleted,
             deleted_at=diagnosis.deleted_at,
             updated_at=diagnosis.updated_at,
+        )
+
+
+# ============================================================================
+# Patient Lab Tests
+# ============================================================================
+
+
+class PatientLabResultBaseSchema(BaseModel):
+    component_name: str
+    component_code: Optional[str] = None
+    value_numeric: Optional[Decimal] = None
+    value_text: Optional[str] = None
+    unit: Optional[str] = None
+    reference_min: Optional[Decimal] = None
+    reference_max: Optional[Decimal] = None
+    abnormal_flag: Optional[LabResultFlag] = None
+    is_abnormal: Optional[bool] = None
+    notes: Optional[str] = None
+
+    @field_validator("component_name")
+    @classmethod
+    def validate_component_name(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("Result component name is required.")
+        return v.strip()
+
+    @field_validator("component_code", "unit", "value_text")
+    @classmethod
+    def normalize_optional_text(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        v = v.strip()
+        return v or None
+
+    @model_validator(mode="after")
+    def validate_value_and_range(self):
+        if self.value_numeric is None and self.value_text is None:
+            raise ValueError("Provide either a numeric or text result value.")
+        if (
+            self.reference_min is not None
+            and self.reference_max is not None
+            and self.reference_min > self.reference_max
+        ):
+            raise ValueError("Reference minimum cannot be greater than reference maximum.")
+        return self
+
+    model_config = {"from_attributes": True}
+
+
+class PatientLabResultCreateSchema(PatientLabResultBaseSchema):
+    pass
+
+
+class PatientLabResultUpdateSchema(BaseModel):
+    component_name: Optional[str] = None
+    component_code: Optional[str] = None
+    value_numeric: Optional[Decimal] = None
+    value_text: Optional[str] = None
+    unit: Optional[str] = None
+    reference_min: Optional[Decimal] = None
+    reference_max: Optional[Decimal] = None
+    abnormal_flag: Optional[LabResultFlag] = None
+    is_abnormal: Optional[bool] = None
+    notes: Optional[str] = None
+
+    @field_validator("component_name")
+    @classmethod
+    def validate_component_name(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        if not v.strip():
+            raise ValueError("Result component name is required.")
+        return v.strip()
+
+    @field_validator("component_code", "unit", "value_text")
+    @classmethod
+    def normalize_optional_text(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        v = v.strip()
+        return v or None
+
+    model_config = {"from_attributes": True}
+
+
+class PatientLabResultResponseSchema(BaseModel):
+    id: uuid.UUID
+    lab_test_id: uuid.UUID
+    component_name: str
+    component_code: Optional[str] = None
+    value_numeric: Optional[Decimal] = None
+    value_text: Optional[str] = None
+    unit: Optional[str] = None
+    reference_min: Optional[Decimal] = None
+    reference_max: Optional[Decimal] = None
+    abnormal_flag: LabResultFlag
+    is_abnormal: bool
+    notes: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class PatientLabTestCreateSchema(BaseModel):
+    """
+    Create a Hep B, RFT, or LFT lab test for a patient.
+
+    `patient_id` and `ordered_by_id` are set by the route handler.
+    """
+    patient_id: Optional[uuid.UUID] = None
+    test_type: LabTestType
+    test_name: Optional[str] = None
+    ordered_by_id: Optional[uuid.UUID] = None
+    ordered_at: Optional[datetime] = None
+    collected_at: Optional[datetime] = None
+    reported_at: Optional[datetime] = None
+    status: LabTestStatus = LabTestStatus.ORDERED
+    notes: Optional[str] = None
+    results: List[PatientLabResultCreateSchema] = []
+
+    @field_validator("test_name")
+    @classmethod
+    def normalize_test_name(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        v = v.strip()
+        return v or None
+
+    model_config = {"from_attributes": True}
+
+
+class PatientLabTestUpdateSchema(BaseModel):
+    test_type: Optional[LabTestType] = None
+    test_name: Optional[str] = None
+    collected_at: Optional[datetime] = None
+    reported_at: Optional[datetime] = None
+    status: Optional[LabTestStatus] = None
+    notes: Optional[str] = None
+
+    @field_validator("test_name")
+    @classmethod
+    def normalize_test_name(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        v = v.strip()
+        return v or None
+
+    model_config = {"from_attributes": True}
+
+
+class PatientLabTestResponseSchema(BaseModel):
+    id: uuid.UUID
+    patient_id: uuid.UUID
+    test_type: LabTestType
+    test_name: str
+    status: LabTestStatus
+    ordered_by: Optional[UserInfoSchema] = None
+    reviewed_by: Optional[UserInfoSchema] = None
+    ordered_at: datetime
+    collected_at: Optional[datetime] = None
+    reported_at: Optional[datetime] = None
+    has_abnormal_results: bool
+    notes: Optional[str] = None
+    results: List[PatientLabResultResponseSchema] = []
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+    @classmethod
+    def from_lab_test(cls, lab_test: "PatientLabTest") -> "PatientLabTestResponseSchema":
+        ordered_by_info = None
+        if lab_test.ordered_by:
+            ordered_by_info = UserInfoSchema(
+                id=lab_test.ordered_by.id,
+                name=lab_test.ordered_by.full_name or lab_test.ordered_by.username,
+            )
+
+        reviewed_by_info = None
+        if lab_test.reviewed_by:
+            reviewed_by_info = UserInfoSchema(
+                id=lab_test.reviewed_by.id,
+                name=lab_test.reviewed_by.full_name or lab_test.reviewed_by.username,
+            )
+
+        return cls(
+            id=lab_test.id,
+            patient_id=lab_test.patient_id,
+            test_type=lab_test.test_type,
+            test_name=lab_test.test_name,
+            status=lab_test.status,
+            ordered_by=ordered_by_info,
+            reviewed_by=reviewed_by_info,
+            ordered_at=lab_test.ordered_at,
+            collected_at=lab_test.collected_at,
+            reported_at=lab_test.reported_at,
+            has_abnormal_results=any(r.is_abnormal for r in getattr(lab_test, "results", [])),
+            notes=lab_test.notes,
+            results=[
+                PatientLabResultResponseSchema.model_validate(result)
+                for result in getattr(lab_test, "results", [])
+            ],
+            created_at=lab_test.created_at,
+            updated_at=lab_test.updated_at,
         )
 
 

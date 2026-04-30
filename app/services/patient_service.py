@@ -20,6 +20,8 @@ from app.models.patient_model import (
     PatientReminder, Diagnosis, FacilityNotification,
     PatientIdentifier,
     PatientAllergy,
+    PatientLabResult,
+    PatientLabTest,
 )
 from app.schemas.patient_schemas import (
     PregnantPatientCreateSchema,
@@ -44,9 +46,16 @@ from app.schemas.patient_schemas import (
     Sex,
     PatientAllergySchema,
     PatientAllergyUpdateSchema,
+    PatientLabResultCreateSchema,
+    PatientLabResultUpdateSchema,
+    PatientLabTestCreateSchema,
+    PatientLabTestUpdateSchema,
     FacilityNotificationUpdateSchema,
     DiagnosisCreateSchema,
     DiagnosisUpdateSchema,
+    LabResultFlag,
+    LabTestStatus,
+    LabTestType,
     PregnancyOutcome,
 )
 from app.repositories.patient_repo import PatientRepository
@@ -160,6 +169,31 @@ class PatientService:
             return
         facility_id = await self.repo.get_diagnosis_facility_id(diagnosis_id)
         self._assert_facility_access(facility_id)
+
+    async def _assert_lab_test_access(self, lab_test_id: uuid.UUID) -> None:
+        if self.current_user is None or self._is_admin_context():
+            return
+        facility_id = await self.repo.get_lab_test_facility_id(lab_test_id)
+        self._assert_facility_access(facility_id)
+
+    async def _assert_lab_result_access(self, lab_result_id: uuid.UUID) -> None:
+        if self.current_user is None or self._is_admin_context():
+            return
+        facility_id = await self.repo.get_lab_result_facility_id(lab_result_id)
+        self._assert_facility_access(facility_id)
+
+    def _default_lab_test_name(self, test_type: LabTestType) -> str:
+        names = {
+            LabTestType.HEP_B: "Hepatitis B test",
+            LabTestType.RFT: "Renal function test",
+            LabTestType.LFT: "Liver function test",
+        }
+        return names[test_type]
+
+    def _apply_lab_result_indicator(self, result: PatientLabResult) -> None:
+        result.apply_abnormal_indicator()
+        if result.is_abnormal and result.abnormal_flag == LabResultFlag.NORMAL:
+            result.abnormal_flag = LabResultFlag.ABNORMAL
 
     def _closed_pregnancy_grace_deadline(self, pregnancy: Pregnancy) -> Optional[date]:
         if pregnancy.is_active or pregnancy.actual_delivery_date is None:
@@ -1165,6 +1199,162 @@ class PatientService:
         for field, value in update_data.model_dump(exclude_unset=True).items():
             setattr(allergy, field, value)
         return await self.repo.update_patient_allergy(allergy)
+
+    # =========================================================================
+    # Patient lab tests
+    # =========================================================================
+
+    async def create_patient_lab_test(
+        self,
+        patient_id: uuid.UUID,
+        lab_test_data: PatientLabTestCreateSchema,
+        ordered_by_id: uuid.UUID,
+    ) -> PatientLabTest:
+        patient = await self.repo.get_patient_by_id(patient_id)
+        if not patient:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Patient not found.",
+            )
+        self._assert_facility_access(patient.facility_id)
+
+        lab_test_dict = lab_test_data.model_dump(exclude={"results"})
+        lab_test_dict["patient_id"] = patient_id
+        lab_test_dict["ordered_by_id"] = ordered_by_id
+        if not lab_test_dict.get("test_name"):
+            lab_test_dict["test_name"] = self._default_lab_test_name(
+                lab_test_dict["test_type"]
+            )
+
+        results = []
+        for result_data in lab_test_data.results:
+            result = PatientLabResult(**result_data.model_dump())
+            self._apply_lab_result_indicator(result)
+            results.append(result)
+
+        if results and lab_test_dict.get("status") == LabTestStatus.ORDERED:
+            lab_test_dict["status"] = LabTestStatus.COMPLETED
+            lab_test_dict["reviewed_by_id"] = ordered_by_id
+            lab_test_dict["reported_at"] = lab_test_dict.get("reported_at") or datetime.now(timezone.utc)
+
+        lab_test = PatientLabTest(**lab_test_dict)
+        lab_test.results.extend(results)
+        return await self.repo.create_patient_lab_test(lab_test)
+
+    async def get_patient_lab_test(self, lab_test_id: uuid.UUID) -> PatientLabTest:
+        lab_test = await self.repo.get_patient_lab_test_by_id(lab_test_id)
+        if not lab_test:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Lab test not found.",
+            )
+        await self._assert_lab_test_access(lab_test_id)
+        return lab_test
+
+    async def list_patient_lab_tests(
+        self,
+        patient_id: uuid.UUID,
+        test_type: Optional[str] = None,
+    ) -> List[PatientLabTest]:
+        patient = await self.repo.get_patient_by_id(patient_id)
+        if not patient:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Patient not found.",
+            )
+        self._assert_facility_access(patient.facility_id)
+        if test_type:
+            try:
+                LabTestType(test_type)
+            except ValueError:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Invalid test_type. Must be one of: hep_b, rft, lft.",
+                )
+        return await self.repo.get_patient_lab_tests(patient_id, test_type)
+
+    async def update_patient_lab_test(
+        self,
+        lab_test_id: uuid.UUID,
+        update_data: PatientLabTestUpdateSchema,
+        reviewed_by_id: uuid.UUID,
+    ) -> PatientLabTest:
+        lab_test = await self.repo.get_patient_lab_test_by_id(lab_test_id)
+        if not lab_test:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Lab test not found.",
+            )
+        await self._assert_lab_test_access(lab_test_id)
+
+        update_dict = update_data.model_dump(exclude_unset=True)
+        if "test_type" in update_dict and not update_dict.get("test_name"):
+            update_dict["test_name"] = self._default_lab_test_name(
+                update_dict["test_type"]
+            )
+        for field, value in update_dict.items():
+            setattr(lab_test, field, value)
+
+        if "status" in update_dict or "reported_at" in update_dict:
+            lab_test.reviewed_by_id = reviewed_by_id
+
+        return await self.repo.update_patient_lab_test(lab_test)
+
+    async def add_patient_lab_result(
+        self,
+        lab_test_id: uuid.UUID,
+        result_data: PatientLabResultCreateSchema,
+        reviewed_by_id: uuid.UUID,
+    ) -> PatientLabTest:
+        lab_test = await self.repo.get_patient_lab_test_by_id(lab_test_id)
+        if not lab_test:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Lab test not found.",
+            )
+        await self._assert_lab_test_access(lab_test_id)
+
+        lab_result = PatientLabResult(
+            lab_test_id=lab_test_id,
+            **result_data.model_dump(),
+        )
+        self._apply_lab_result_indicator(lab_result)
+        await self.repo.create_patient_lab_result(lab_result)
+
+        lab_test.status = LabTestStatus.COMPLETED
+        lab_test.reviewed_by_id = reviewed_by_id
+        lab_test.reported_at = lab_test.reported_at or datetime.now(timezone.utc)
+        await self.repo.update_patient_lab_test(lab_test)
+
+        refreshed = await self.repo.get_patient_lab_test_by_id(lab_test_id)
+        return refreshed
+
+    async def update_patient_lab_result(
+        self,
+        lab_result_id: uuid.UUID,
+        update_data: PatientLabResultUpdateSchema,
+        reviewed_by_id: uuid.UUID,
+    ) -> PatientLabTest:
+        lab_result = await self.repo.get_patient_lab_result_by_id(lab_result_id)
+        if not lab_result:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Lab result not found.",
+            )
+        await self._assert_lab_result_access(lab_result_id)
+
+        update_dict = update_data.model_dump(exclude_unset=True)
+        for field, value in update_dict.items():
+            setattr(lab_result, field, value)
+        self._apply_lab_result_indicator(lab_result)
+        await self.repo.update_patient_lab_result(lab_result)
+
+        lab_test = await self.repo.get_patient_lab_test_by_id(lab_result.lab_test_id)
+        lab_test.reviewed_by_id = reviewed_by_id
+        await self.repo.update_patient_lab_test(lab_test)
+
+        refreshed = await self.repo.get_patient_lab_test_by_id(lab_result.lab_test_id)
+        return refreshed
 
     # =========================================================================
     # Reminder

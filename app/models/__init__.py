@@ -45,6 +45,8 @@ from .patient_model import (
     PregnantPatient,
     RegularPatient,
     Diagnosis,
+    PatientLabResult,
+    PatientLabTest,
     PatientIdentifier,
     PatientAllergy,
     Vaccination,

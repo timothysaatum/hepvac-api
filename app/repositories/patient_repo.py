@@ -27,6 +27,8 @@ from app.models.patient_model import (
     FacilityNotification,
     PatientIdentifier,
     PatientAllergy,
+    PatientLabResult,
+    PatientLabTest,
 )
 
 
@@ -138,6 +140,35 @@ class PatientRepository:
             .where(
                 Diagnosis.id == diagnosis_id,
                 Diagnosis.is_deleted == False,
+                Patient.is_deleted == False,
+            )
+        )
+        return result.scalar_one_or_none()
+
+    async def get_lab_test_facility_id(
+        self,
+        lab_test_id: uuid.UUID,
+    ) -> Optional[uuid.UUID]:
+        result = await self.db.execute(
+            select(Patient.facility_id)
+            .join(PatientLabTest, PatientLabTest.patient_id == Patient.id)
+            .where(
+                PatientLabTest.id == lab_test_id,
+                Patient.is_deleted == False,
+            )
+        )
+        return result.scalar_one_or_none()
+
+    async def get_lab_result_facility_id(
+        self,
+        lab_result_id: uuid.UUID,
+    ) -> Optional[uuid.UUID]:
+        result = await self.db.execute(
+            select(Patient.facility_id)
+            .join(PatientLabTest, PatientLabTest.patient_id == Patient.id)
+            .join(PatientLabResult, PatientLabResult.lab_test_id == PatientLabTest.id)
+            .where(
+                PatientLabResult.id == lab_result_id,
                 Patient.is_deleted == False,
             )
         )
@@ -618,6 +649,80 @@ class PatientRepository:
         await self.db.commit()
         await self.db.refresh(allergy)
         return allergy
+
+    # =========================================================================
+    # Patient lab tests
+    # =========================================================================
+
+    async def create_patient_lab_test(self, lab_test: PatientLabTest) -> PatientLabTest:
+        self.db.add(lab_test)
+        await self.db.commit()
+        created = await self.get_patient_lab_test_by_id(lab_test.id)
+        return created
+
+    async def get_patient_lab_test_by_id(
+        self, lab_test_id: uuid.UUID
+    ) -> Optional[PatientLabTest]:
+        result = await self.db.execute(
+            select(PatientLabTest)
+            .where(PatientLabTest.id == lab_test_id)
+            .options(
+                selectinload(PatientLabTest.results),
+                selectinload(PatientLabTest.ordered_by),
+                selectinload(PatientLabTest.reviewed_by),
+            )
+        )
+        return result.scalars().first()
+
+    async def get_patient_lab_tests(
+        self,
+        patient_id: uuid.UUID,
+        test_type: Optional[str] = None,
+    ) -> List[PatientLabTest]:
+        query = (
+            select(PatientLabTest)
+            .where(PatientLabTest.patient_id == patient_id)
+            .options(
+                selectinload(PatientLabTest.results),
+                selectinload(PatientLabTest.ordered_by),
+                selectinload(PatientLabTest.reviewed_by),
+            )
+        )
+        if test_type:
+            query = query.where(PatientLabTest.test_type == test_type)
+        query = query.order_by(PatientLabTest.ordered_at.desc())
+        result = await self.db.execute(query)
+        return list(result.scalars().all())
+
+    async def update_patient_lab_test(self, lab_test: PatientLabTest) -> PatientLabTest:
+        self.db.add(lab_test)
+        await self.db.commit()
+        updated = await self.get_patient_lab_test_by_id(lab_test.id)
+        return updated
+
+    async def create_patient_lab_result(
+        self, lab_result: PatientLabResult
+    ) -> PatientLabResult:
+        self.db.add(lab_result)
+        await self.db.commit()
+        await self.db.refresh(lab_result)
+        return lab_result
+
+    async def get_patient_lab_result_by_id(
+        self, lab_result_id: uuid.UUID
+    ) -> Optional[PatientLabResult]:
+        result = await self.db.execute(
+            select(PatientLabResult).where(PatientLabResult.id == lab_result_id)
+        )
+        return result.scalars().first()
+
+    async def update_patient_lab_result(
+        self, lab_result: PatientLabResult
+    ) -> PatientLabResult:
+        self.db.add(lab_result)
+        await self.db.commit()
+        await self.db.refresh(lab_result)
+        return lab_result
 
     # =========================================================================
     # Reminder

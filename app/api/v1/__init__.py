@@ -7,6 +7,7 @@ from .patient.child_routes import router as child_router
 from .patient.medication_routes import router as medication_router
 from .patient.patient_schedules import router as patient_schedule_router
 from .patient.reminder_routes import router as reminder_router
+from .patient.lab_test_routes import router as lab_test_router
 from .vaccines.vaccine_purchases import router as vaccine_purchase_router
 from .vaccines.vaccine_payment import router as vaccine_payment
 from .vaccines.administer_vaccine import router as administer_vaccine
@@ -35,6 +36,7 @@ router.include_router(administer_vaccine)
 router.include_router(medication_router)
 router.include_router(patient_schedule_router)
 router.include_router(reminder_router)
+router.include_router(lab_test_router)
 router.include_router(search_router)
 router.include_router(dashboard_router)
 router.include_router(settings_router)
