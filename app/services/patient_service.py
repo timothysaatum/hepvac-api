@@ -84,6 +84,15 @@ class PatientService:
             )
         )
 
+    def _can_verify_lab_results(self) -> bool:
+        if not self.current_user:
+            return False
+        role_names = {role.name.lower() for role in self.current_user.roles}
+        return bool(
+            role_names
+            & {"admin", "superadmin", "super_admin", "supervisor", "lab_supervisor", "manager"}
+        )
+
     def _current_facility_id(self) -> Optional[uuid.UUID]:
         return self.current_user.facility_id if self.current_user else None
 
@@ -1399,8 +1408,21 @@ class PatientService:
             result = PatientLabResult(**result_data.model_dump())
             results.append(result)
 
-        if results and lab_test_dict.get("status") == LabTestStatus.ORDERED:
-            lab_test_dict["status"] = LabTestStatus.COMPLETED
+        if results and lab_test_dict.get("status") in {
+            LabTestStatus.ORDERED,
+            LabTestStatus.IN_PROGRESS,
+        }:
+            lab_test_dict["status"] = LabTestStatus.DRAFT
+
+        if lab_test_dict.get("status") == LabTestStatus.FILED:
+            lab_test_dict["reported_at"] = lab_test_dict.get("reported_at") or datetime.now(timezone.utc)
+
+        if lab_test_dict.get("status") == LabTestStatus.VERIFIED:
+            if not self._can_verify_lab_results():
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Only a supervisor or administrator can verify lab results.",
+                )
             lab_test_dict["reviewed_by_id"] = ordered_by_id
             lab_test_dict["reported_at"] = lab_test_dict.get("reported_at") or datetime.now(timezone.utc)
 
@@ -1474,8 +1496,19 @@ class PatientService:
         for field, value in update_dict.items():
             setattr(lab_test, field, value)
 
-        if "status" in update_dict or "reported_at" in update_dict:
+        if update_dict.get("status") == LabTestStatus.VERIFIED:
+            if not self._can_verify_lab_results():
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Only a supervisor or administrator can verify lab results.",
+                )
             lab_test.reviewed_by_id = reviewed_by_id
+            lab_test.reported_at = lab_test.reported_at or datetime.now(timezone.utc)
+        elif update_dict.get("status") == LabTestStatus.FILED:
+            lab_test.reviewed_by_id = None
+            lab_test.reported_at = lab_test.reported_at or datetime.now(timezone.utc)
+        elif update_dict.get("status") == LabTestStatus.DRAFT:
+            lab_test.reviewed_by_id = None
 
         return await self.repo.update_patient_lab_test(lab_test)
 
@@ -1500,9 +1533,13 @@ class PatientService:
         await self._apply_parameter_definition_to_result(lab_result, lab_test)
         await self.repo.create_patient_lab_result(lab_result)
 
-        lab_test.status = LabTestStatus.COMPLETED
-        lab_test.reviewed_by_id = reviewed_by_id
-        lab_test.reported_at = lab_test.reported_at or datetime.now(timezone.utc)
+        if lab_test.status in {
+            LabTestStatus.ORDERED,
+            LabTestStatus.IN_PROGRESS,
+            LabTestStatus.COMPLETED,
+        }:
+            lab_test.status = LabTestStatus.DRAFT
+        lab_test.reviewed_by_id = None
         await self.repo.update_patient_lab_test(lab_test)
 
         refreshed = await self.repo.get_patient_lab_test_by_id(lab_test_id)
@@ -1529,7 +1566,8 @@ class PatientService:
         await self._apply_parameter_definition_to_result(lab_result, lab_test)
         await self.repo.update_patient_lab_result(lab_result)
 
-        lab_test.reviewed_by_id = reviewed_by_id
+        if lab_test.status != LabTestStatus.VERIFIED:
+            lab_test.reviewed_by_id = None
         await self.repo.update_patient_lab_test(lab_test)
 
         refreshed = await self.repo.get_patient_lab_test_by_id(lab_result.lab_test_id)

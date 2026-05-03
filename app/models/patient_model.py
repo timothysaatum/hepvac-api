@@ -477,7 +477,7 @@ class PatientLabTest(Base):
     test_name: Mapped[str] = mapped_column(String(120), nullable=False)
     status: Mapped[LabTestStatus] = mapped_column(
         lab_test_status_enum,
-        default=LabTestStatus.ORDERED,
+        default=LabTestStatus.DRAFT,
         nullable=False,
         index=True,
     )

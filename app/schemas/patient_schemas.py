@@ -98,6 +98,9 @@ class LabTestType(str, Enum):
 
 
 class LabTestStatus(str, Enum):
+    DRAFT      = "draft"
+    FILED      = "filed"
+    VERIFIED   = "verified"
     ORDERED    = "ordered"
     IN_PROGRESS = "in_progress"
     COMPLETED  = "completed"
@@ -1582,7 +1585,7 @@ class PatientLabTestCreateSchema(BaseModel):
     ordered_at: Optional[datetime] = None
     collected_at: Optional[datetime] = None
     reported_at: Optional[datetime] = None
-    status: LabTestStatus = LabTestStatus.ORDERED
+    status: LabTestStatus = LabTestStatus.DRAFT
     notes: Optional[str] = None
     results: List[PatientLabResultCreateSchema] = Field(default_factory=list)
 
