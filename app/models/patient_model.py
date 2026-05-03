@@ -40,7 +40,7 @@ from sqlalchemy import (
     UniqueConstraint,
     func,
 )
-from sqlalchemy.dialects.postgresql import UUID as PGUUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship, validates
 
 from app.db.base import Base
@@ -440,7 +440,7 @@ class Diagnosis(Base):
 
 
 class PatientLabTest(Base):
-    """Patient-level lab order/result container for Hep B, RFT, and LFT tests."""
+    """Patient-level lab order/result container created from a configured test."""
 
     __tablename__ = "patient_lab_tests"
 
@@ -463,9 +463,15 @@ class PatientLabTest(Base):
         nullable=False,
         index=True,
     )
-    test_type: Mapped[LabTestType] = mapped_column(
+    test_definition_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("lab_test_definitions.id", ondelete="RESTRICT"),
+        nullable=True,
+        index=True,
+    )
+    test_type: Mapped[Optional[LabTestType]] = mapped_column(
         lab_test_type_enum,
-        nullable=False,
+        nullable=True,
         index=True,
     )
     test_name: Mapped[str] = mapped_column(String(120), nullable=False)
@@ -517,6 +523,10 @@ class PatientLabTest(Base):
         "Patient",
         back_populates="lab_tests",
         lazy="noload",
+    )
+    test_definition: Mapped[Optional["LabTestDefinition"]] = relationship(
+        "LabTestDefinition",
+        lazy="selectin",
     )
     ordered_by: Mapped[Optional["User"]] = relationship(
         "User",
@@ -577,6 +587,12 @@ class PatientLabResult(Base):
         nullable=False,
         index=True,
     )
+    parameter_definition_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("lab_test_parameter_definitions.id", ondelete="RESTRICT"),
+        nullable=True,
+        index=True,
+    )
     component_name: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
     component_code: Mapped[Optional[str]] = mapped_column(String(50), nullable=True, index=True)
     value_numeric: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 4), nullable=True)
@@ -608,6 +624,10 @@ class PatientLabResult(Base):
         "PatientLabTest",
         back_populates="results",
         lazy="noload",
+    )
+    parameter_definition: Mapped[Optional["LabTestParameterDefinition"]] = relationship(
+        "LabTestParameterDefinition",
+        lazy="selectin",
     )
 
     @validates("component_name")
@@ -645,6 +665,143 @@ class PatientLabResult(Base):
 
     def __repr__(self) -> str:
         return f"<PatientLabResult id={self.id} component={self.component_name}>"
+
+
+class LabTestDefinition(Base):
+    """Reusable lab test template configured once and ordered for many patients."""
+
+    __tablename__ = "lab_test_definitions"
+
+    __table_args__ = (
+        UniqueConstraint("code", name="uq_lab_test_definitions_code"),
+        CheckConstraint("code = lower(code)", name="ck_lab_test_definition_code_lower"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+        index=True,
+    )
+    code: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
+    short_name: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+    category: Mapped[Optional[str]] = mapped_column(String(80), nullable=True, index=True)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    specimen: Mapped[Optional[str]] = mapped_column(String(80), nullable=True)
+    method: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False, index=True)
+    created_by_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+    parameters: Mapped[List["LabTestParameterDefinition"]] = relationship(
+        "LabTestParameterDefinition",
+        back_populates="test_definition",
+        cascade="all, delete-orphan",
+        order_by="LabTestParameterDefinition.display_order",
+        lazy="selectin",
+    )
+    created_by: Mapped[Optional["User"]] = relationship("User", lazy="selectin")
+
+    @validates("code")
+    def validate_code(self, key: str, value: str) -> str:
+        value = (value or "").strip().lower()
+        if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{1,48}[a-z0-9]", value):
+            raise ValueError("Lab test code must be lowercase letters, numbers, dashes, or underscores.")
+        return value
+
+    @validates("name")
+    def validate_name(self, key: str, value: str) -> str:
+        value = (value or "").strip()
+        if not value:
+            raise ValueError("Lab test name is required.")
+        if len(value) > 120:
+            raise ValueError("Lab test name must not exceed 120 characters.")
+        return value
+
+
+class LabTestParameterDefinition(Base):
+    """Reusable parameter definition including reference ranges and text rules."""
+
+    __tablename__ = "lab_test_parameter_definitions"
+
+    __table_args__ = (
+        UniqueConstraint("lab_test_definition_id", "code", name="uq_lab_test_parameter_definition_code"),
+        CheckConstraint("reference_min IS NULL OR reference_max IS NULL OR reference_min <= reference_max", name="ck_lab_parameter_range_valid"),
+        CheckConstraint("value_type IN ('numeric', 'text', 'both')", name="ck_lab_parameter_value_type"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+        index=True,
+    )
+    lab_test_definition_id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("lab_test_definitions.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    code: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
+    value_type: Mapped[str] = mapped_column(String(20), default="numeric", nullable=False)
+    unit: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+    reference_min: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 4), nullable=True)
+    reference_max: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 4), nullable=True)
+    normal_values: Mapped[Optional[list[str]]] = mapped_column(JSONB, nullable=True)
+    abnormal_values: Mapped[Optional[list[str]]] = mapped_column(JSONB, nullable=True)
+    display_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    is_required: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False, index=True)
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+    test_definition: Mapped["LabTestDefinition"] = relationship(
+        "LabTestDefinition",
+        back_populates="parameters",
+        lazy="selectin",
+    )
+
+    @validates("code")
+    def validate_code(self, key: str, value: str) -> str:
+        value = (value or "").strip().lower()
+        if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{1,48}[a-z0-9]", value):
+            raise ValueError("Parameter code must be lowercase letters, numbers, dashes, or underscores.")
+        return value
+
+    @validates("name")
+    def validate_name(self, key: str, value: str) -> str:
+        value = (value or "").strip()
+        if not value:
+            raise ValueError("Parameter name is required.")
+        if len(value) > 120:
+            raise ValueError("Parameter name must not exceed 120 characters.")
+        return value
 
 
 # ============================================================================

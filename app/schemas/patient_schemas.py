@@ -9,14 +9,14 @@ from datetime import date, datetime
 from decimal import Decimal
 from enum import Enum
 import re
-from typing import TYPE_CHECKING, Dict, List, Optional
+from typing import TYPE_CHECKING, Dict, List, Literal, Optional
 import uuid
 
-from pydantic import BaseModel, field_validator, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy.dialects.postgresql import ENUM as PGENUM
 
 if TYPE_CHECKING:
-    from app.models.patient_model import Child, Diagnosis, PatientLabResult, PatientLabTest, PregnantPatient, Prescription, RegularPatient
+    from app.models.patient_model import Child, Diagnosis, LabTestDefinition, PatientLabResult, PatientLabTest, PregnantPatient, Prescription, RegularPatient
 
 # ============================================================================
 # Enumerations
@@ -1254,8 +1254,219 @@ class DiagnosisResponseSchema(BaseModel):
 # ============================================================================
 
 
+class LabTestParameterDefinitionBaseSchema(BaseModel):
+    code: str
+    name: str
+    value_type: Literal["numeric", "text", "both"] = "numeric"
+    unit: Optional[str] = None
+    reference_min: Optional[Decimal] = None
+    reference_max: Optional[Decimal] = None
+    normal_values: List[str] = Field(default_factory=list)
+    abnormal_values: List[str] = Field(default_factory=list)
+    display_order: int = 0
+    is_required: bool = False
+    is_active: bool = True
+    notes: Optional[str] = None
+
+    @field_validator("code")
+    @classmethod
+    def validate_code(cls, v: str) -> str:
+        v = (v or "").strip().lower()
+        if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{1,48}[a-z0-9]", v):
+            raise ValueError("Code must be 3-50 lowercase letters, numbers, dashes, or underscores.")
+        return v
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, v: str) -> str:
+        v = (v or "").strip()
+        if not v:
+            raise ValueError("Name is required.")
+        return v
+
+    @field_validator("unit", "notes")
+    @classmethod
+    def normalize_optional_text(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        v = v.strip()
+        return v or None
+
+    @field_validator("normal_values", "abnormal_values")
+    @classmethod
+    def normalize_value_lists(cls, values: List[str]) -> List[str]:
+        normalized = []
+        seen = set()
+        for value in values or []:
+            cleaned = value.strip()
+            key = cleaned.lower()
+            if cleaned and key not in seen:
+                normalized.append(cleaned)
+                seen.add(key)
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_range(self):
+        if (
+            self.reference_min is not None
+            and self.reference_max is not None
+            and self.reference_min > self.reference_max
+        ):
+            raise ValueError("Reference minimum cannot be greater than reference maximum.")
+        return self
+
+    model_config = {"from_attributes": True}
+
+
+class LabTestParameterDefinitionCreateSchema(LabTestParameterDefinitionBaseSchema):
+    pass
+
+
+class LabTestParameterDefinitionUpdateSchema(BaseModel):
+    code: Optional[str] = None
+    name: Optional[str] = None
+    value_type: Optional[Literal["numeric", "text", "both"]] = None
+    unit: Optional[str] = None
+    reference_min: Optional[Decimal] = None
+    reference_max: Optional[Decimal] = None
+    normal_values: Optional[List[str]] = None
+    abnormal_values: Optional[List[str]] = None
+    display_order: Optional[int] = None
+    is_required: Optional[bool] = None
+    is_active: Optional[bool] = None
+    notes: Optional[str] = None
+
+    @field_validator("code")
+    @classmethod
+    def validate_code(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        return LabTestParameterDefinitionBaseSchema.validate_code(v)
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        return LabTestParameterDefinitionBaseSchema.validate_name(v)
+
+    model_config = {"from_attributes": True}
+
+
+class LabTestParameterDefinitionResponseSchema(BaseModel):
+    id: uuid.UUID
+    lab_test_definition_id: uuid.UUID
+    code: str
+    name: str
+    value_type: Literal["numeric", "text", "both"]
+    unit: Optional[str] = None
+    reference_min: Optional[Decimal] = None
+    reference_max: Optional[Decimal] = None
+    normal_values: List[str] = Field(default_factory=list)
+    abnormal_values: List[str] = Field(default_factory=list)
+    display_order: int
+    is_required: bool
+    is_active: bool
+    notes: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+
+    @field_validator("normal_values", "abnormal_values", mode="before")
+    @classmethod
+    def default_value_lists(cls, values):
+        return values or []
+
+    model_config = {"from_attributes": True}
+
+
+class LabTestDefinitionBaseSchema(BaseModel):
+    code: str
+    name: str
+    short_name: Optional[str] = None
+    category: Optional[str] = None
+    description: Optional[str] = None
+    specimen: Optional[str] = None
+    method: Optional[str] = None
+    is_active: bool = True
+
+    @field_validator("code")
+    @classmethod
+    def validate_code(cls, v: str) -> str:
+        v = (v or "").strip().lower()
+        if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{1,48}[a-z0-9]", v):
+            raise ValueError("Code must be 3-50 lowercase letters, numbers, dashes, or underscores.")
+        return v
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, v: str) -> str:
+        v = (v or "").strip()
+        if not v:
+            raise ValueError("Test name is required.")
+        return v
+
+    @field_validator("short_name", "category", "description", "specimen", "method")
+    @classmethod
+    def normalize_optional_text(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        v = v.strip()
+        return v or None
+
+    model_config = {"from_attributes": True}
+
+
+class LabTestDefinitionCreateSchema(LabTestDefinitionBaseSchema):
+    parameters: List[LabTestParameterDefinitionCreateSchema] = Field(default_factory=list)
+
+
+class LabTestDefinitionUpdateSchema(BaseModel):
+    code: Optional[str] = None
+    name: Optional[str] = None
+    short_name: Optional[str] = None
+    category: Optional[str] = None
+    description: Optional[str] = None
+    specimen: Optional[str] = None
+    method: Optional[str] = None
+    is_active: Optional[bool] = None
+
+    @field_validator("code")
+    @classmethod
+    def validate_code(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        return LabTestDefinitionBaseSchema.validate_code(v)
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        return LabTestDefinitionBaseSchema.validate_name(v)
+
+    model_config = {"from_attributes": True}
+
+
+class LabTestDefinitionResponseSchema(BaseModel):
+    id: uuid.UUID
+    code: str
+    name: str
+    short_name: Optional[str] = None
+    category: Optional[str] = None
+    description: Optional[str] = None
+    specimen: Optional[str] = None
+    method: Optional[str] = None
+    is_active: bool
+    parameters: List[LabTestParameterDefinitionResponseSchema] = Field(default_factory=list)
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
 class PatientLabResultBaseSchema(BaseModel):
-    component_name: str
+    parameter_definition_id: Optional[uuid.UUID] = None
+    component_name: Optional[str] = None
     component_code: Optional[str] = None
     value_numeric: Optional[Decimal] = None
     value_text: Optional[str] = None
@@ -1268,8 +1479,10 @@ class PatientLabResultBaseSchema(BaseModel):
 
     @field_validator("component_name")
     @classmethod
-    def validate_component_name(cls, v: str) -> str:
-        if not v or not v.strip():
+    def validate_component_name(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        if not v.strip():
             raise ValueError("Result component name is required.")
         return v.strip()
 
@@ -1285,6 +1498,8 @@ class PatientLabResultBaseSchema(BaseModel):
     def validate_value_and_range(self):
         if self.value_numeric is None and self.value_text is None:
             raise ValueError("Provide either a numeric or text result value.")
+        if self.parameter_definition_id is None and not self.component_name:
+            raise ValueError("Select a configured parameter or provide a component name.")
         if (
             self.reference_min is not None
             and self.reference_max is not None
@@ -1301,6 +1516,7 @@ class PatientLabResultCreateSchema(PatientLabResultBaseSchema):
 
 
 class PatientLabResultUpdateSchema(BaseModel):
+    parameter_definition_id: Optional[uuid.UUID] = None
     component_name: Optional[str] = None
     component_code: Optional[str] = None
     value_numeric: Optional[Decimal] = None
@@ -1335,6 +1551,7 @@ class PatientLabResultUpdateSchema(BaseModel):
 class PatientLabResultResponseSchema(BaseModel):
     id: uuid.UUID
     lab_test_id: uuid.UUID
+    parameter_definition_id: Optional[uuid.UUID] = None
     component_name: str
     component_code: Optional[str] = None
     value_numeric: Optional[Decimal] = None
@@ -1358,7 +1575,8 @@ class PatientLabTestCreateSchema(BaseModel):
     `patient_id` and `ordered_by_id` are set by the route handler.
     """
     patient_id: Optional[uuid.UUID] = None
-    test_type: LabTestType
+    test_definition_id: Optional[uuid.UUID] = None
+    test_type: Optional[LabTestType] = None
     test_name: Optional[str] = None
     ordered_by_id: Optional[uuid.UUID] = None
     ordered_at: Optional[datetime] = None
@@ -1366,7 +1584,13 @@ class PatientLabTestCreateSchema(BaseModel):
     reported_at: Optional[datetime] = None
     status: LabTestStatus = LabTestStatus.ORDERED
     notes: Optional[str] = None
-    results: List[PatientLabResultCreateSchema] = []
+    results: List[PatientLabResultCreateSchema] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_test_source(self):
+        if self.test_definition_id is None and self.test_type is None:
+            raise ValueError("Select a configured test definition.")
+        return self
 
     @field_validator("test_name")
     @classmethod
@@ -1380,6 +1604,7 @@ class PatientLabTestCreateSchema(BaseModel):
 
 
 class PatientLabTestUpdateSchema(BaseModel):
+    test_definition_id: Optional[uuid.UUID] = None
     test_type: Optional[LabTestType] = None
     test_name: Optional[str] = None
     collected_at: Optional[datetime] = None
@@ -1401,7 +1626,9 @@ class PatientLabTestUpdateSchema(BaseModel):
 class PatientLabTestResponseSchema(BaseModel):
     id: uuid.UUID
     patient_id: uuid.UUID
-    test_type: LabTestType
+    test_definition_id: Optional[uuid.UUID] = None
+    test_definition: Optional[LabTestDefinitionResponseSchema] = None
+    test_type: Optional[LabTestType] = None
     test_name: str
     status: LabTestStatus
     ordered_by: Optional[UserInfoSchema] = None
@@ -1436,6 +1663,12 @@ class PatientLabTestResponseSchema(BaseModel):
         return cls(
             id=lab_test.id,
             patient_id=lab_test.patient_id,
+            test_definition_id=lab_test.test_definition_id,
+            test_definition=(
+                LabTestDefinitionResponseSchema.model_validate(lab_test.test_definition)
+                if getattr(lab_test, "test_definition", None)
+                else None
+            ),
             test_type=lab_test.test_type,
             test_name=lab_test.test_name,
             status=lab_test.status,

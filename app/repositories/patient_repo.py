@@ -21,6 +21,8 @@ from app.models.patient_model import (
     RegularPatient,
     Child,
     Diagnosis,
+    LabTestDefinition,
+    LabTestParameterDefinition,
     Prescription,
     MedicationSchedule,
     PatientReminder,
@@ -303,16 +305,17 @@ class PatientRepository:
             base_query = base_query.where(Patient.patient_type == patient_type)
         if patient_status:
             base_query = base_query.where(Patient.status == patient_status)
-        if delivery_date_field and delivery_start_date and delivery_end_date:
+        if delivery_date_field and (delivery_start_date or delivery_end_date):
             date_column = (
                 Pregnancy.actual_delivery_date
                 if delivery_date_field == "actual"
                 else Pregnancy.expected_delivery_date
             )
-            pregnancy_query = select(Pregnancy.patient_id).where(
-                date_column >= delivery_start_date,
-                date_column <= delivery_end_date,
-            )
+            pregnancy_query = select(Pregnancy.patient_id)
+            if delivery_start_date:
+                pregnancy_query = pregnancy_query.where(date_column >= delivery_start_date)
+            if delivery_end_date:
+                pregnancy_query = pregnancy_query.where(date_column <= delivery_end_date)
             if delivery_date_field == "expected":
                 pregnancy_query = pregnancy_query.where(Pregnancy.is_active == True)
             else:
@@ -688,6 +691,7 @@ class PatientRepository:
                 selectinload(PatientLabTest.results),
                 selectinload(PatientLabTest.ordered_by),
                 selectinload(PatientLabTest.reviewed_by),
+                selectinload(PatientLabTest.test_definition).selectinload(LabTestDefinition.parameters),
             )
         )
         return result.scalars().first()
@@ -704,6 +708,7 @@ class PatientRepository:
                 selectinload(PatientLabTest.results),
                 selectinload(PatientLabTest.ordered_by),
                 selectinload(PatientLabTest.reviewed_by),
+                selectinload(PatientLabTest.test_definition).selectinload(LabTestDefinition.parameters),
             )
         )
         if test_type:
@@ -741,6 +746,26 @@ class PatientRepository:
         await self.db.commit()
         await self.db.refresh(lab_result)
         return lab_result
+
+    async def get_lab_test_definition_by_id(
+        self, test_definition_id: uuid.UUID
+    ) -> Optional[LabTestDefinition]:
+        result = await self.db.execute(
+            select(LabTestDefinition)
+            .where(LabTestDefinition.id == test_definition_id)
+            .options(selectinload(LabTestDefinition.parameters))
+        )
+        return result.scalars().first()
+
+    async def get_lab_parameter_definition_by_id(
+        self, parameter_definition_id: uuid.UUID
+    ) -> Optional[LabTestParameterDefinition]:
+        result = await self.db.execute(
+            select(LabTestParameterDefinition).where(
+                LabTestParameterDefinition.id == parameter_definition_id
+            )
+        )
+        return result.scalars().first()
 
     # =========================================================================
     # Reminder

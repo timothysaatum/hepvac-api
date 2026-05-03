@@ -4,6 +4,7 @@ Patient routes.
 
 import traceback
 import uuid
+from datetime import date
 from math import ceil
 from typing import Optional
 
@@ -794,6 +795,8 @@ async def list_patients(
     delivery_date_field: Optional[str] = None,
     delivery_window_days: Optional[int] = None,
     delivery_window_months: Optional[int] = None,
+    delivery_date_from: Optional[date] = None,
+    delivery_date_to: Optional[date] = None,
 ):
     """Paginated compact list of patients with optional filters."""
     try:
@@ -806,6 +809,8 @@ async def list_patients(
             delivery_date_field=delivery_date_field,
             delivery_window_days=delivery_window_days,
             delivery_window_months=delivery_window_months,
+            delivery_date_from=delivery_date_from,
+            delivery_date_to=delivery_date_to,
             page=pagination.page,
             page_size=pagination.page_size,
         )

@@ -196,6 +196,47 @@ class PatientService:
         if result.is_abnormal and result.abnormal_flag == LabResultFlag.NORMAL:
             result.abnormal_flag = LabResultFlag.ABNORMAL
 
+    async def _apply_parameter_definition_to_result(
+        self,
+        result: PatientLabResult,
+        lab_test: Optional[PatientLabTest] = None,
+    ) -> None:
+        if not result.parameter_definition_id:
+            self._apply_lab_result_indicator(result)
+            return
+
+        parameter = await self.repo.get_lab_parameter_definition_by_id(result.parameter_definition_id)
+        if not parameter or not parameter.is_active:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Selected lab parameter is not available.",
+            )
+
+        if lab_test and lab_test.test_definition_id and parameter.lab_test_definition_id != lab_test.test_definition_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Selected parameter does not belong to this lab test.",
+            )
+
+        result.component_name = parameter.name
+        result.component_code = parameter.code
+        result.unit = parameter.unit
+        result.reference_min = parameter.reference_min
+        result.reference_max = parameter.reference_max
+
+        self._apply_lab_result_indicator(result)
+
+        text_value = (result.value_text or "").strip().lower()
+        if text_value:
+            abnormal_values = {v.lower() for v in (parameter.abnormal_values or [])}
+            normal_values = {v.lower() for v in (parameter.normal_values or [])}
+            if text_value in abnormal_values:
+                result.abnormal_flag = LabResultFlag.ABNORMAL
+                result.is_abnormal = True
+            elif text_value in normal_values:
+                result.abnormal_flag = LabResultFlag.NORMAL
+                result.is_abnormal = False
+
     def _add_months(self, start: date, months: int) -> date:
         month = start.month - 1 + months
         year = start.year + month // 12
@@ -221,8 +262,16 @@ class PatientService:
         delivery_date_field: Optional[str],
         delivery_window_days: Optional[int],
         delivery_window_months: Optional[int],
+        delivery_date_from: Optional[date] = None,
+        delivery_date_to: Optional[date] = None,
     ) -> tuple[Optional[date], Optional[date]]:
-        if not delivery_date_field and delivery_window_days is None and delivery_window_months is None:
+        has_explicit_range = delivery_date_from is not None or delivery_date_to is not None
+        if (
+            not delivery_date_field
+            and delivery_window_days is None
+            and delivery_window_months is None
+            and not has_explicit_range
+        ):
             return None, None
 
         if delivery_date_field not in {"expected", "actual"}:
@@ -230,6 +279,19 @@ class PatientService:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="delivery_date_field must be either 'expected' or 'actual'.",
             )
+        if has_explicit_range:
+            if delivery_window_days is not None or delivery_window_months is not None:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Use either delivery date range or delivery window filters, not both.",
+                )
+            if delivery_date_from and delivery_date_to and delivery_date_from > delivery_date_to:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="delivery_date_from must not be later than delivery_date_to.",
+                )
+            return delivery_date_from, delivery_date_to
+
         if delivery_window_days is not None and delivery_window_months is not None:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -704,6 +766,8 @@ class PatientService:
         delivery_date_field: Optional[str] = None,
         delivery_window_days: Optional[int] = None,
         delivery_window_months: Optional[int] = None,
+        delivery_date_from: Optional[date] = None,
+        delivery_date_to: Optional[date] = None,
         page: int = 1,
         page_size: int = 10,
     ) -> tuple[List, int]:
@@ -736,6 +800,8 @@ class PatientService:
             delivery_date_field,
             delivery_window_days,
             delivery_window_months,
+            delivery_date_from,
+            delivery_date_to,
         )
 
         facility_id = self._scope_facility_filter(facility_id)
@@ -1311,6 +1377,18 @@ class PatientService:
         lab_test_dict = lab_test_data.model_dump(exclude={"results"})
         lab_test_dict["patient_id"] = patient_id
         lab_test_dict["ordered_by_id"] = ordered_by_id
+        definition = None
+        if lab_test_dict.get("test_definition_id"):
+            definition = await self.repo.get_lab_test_definition_by_id(
+                lab_test_dict["test_definition_id"]
+            )
+            if not definition or not definition.is_active:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Selected lab test definition is not available.",
+                )
+            lab_test_dict["test_name"] = lab_test_dict.get("test_name") or definition.name
+
         if not lab_test_dict.get("test_name"):
             lab_test_dict["test_name"] = self._default_lab_test_name(
                 lab_test_dict["test_type"]
@@ -1319,7 +1397,6 @@ class PatientService:
         results = []
         for result_data in lab_test_data.results:
             result = PatientLabResult(**result_data.model_dump())
-            self._apply_lab_result_indicator(result)
             results.append(result)
 
         if results and lab_test_dict.get("status") == LabTestStatus.ORDERED:
@@ -1328,6 +1405,8 @@ class PatientService:
             lab_test_dict["reported_at"] = lab_test_dict.get("reported_at") or datetime.now(timezone.utc)
 
         lab_test = PatientLabTest(**lab_test_dict)
+        for result in results:
+            await self._apply_parameter_definition_to_result(result, lab_test)
         lab_test.results.extend(results)
         return await self.repo.create_patient_lab_test(lab_test)
 
@@ -1378,7 +1457,17 @@ class PatientService:
         await self._assert_lab_test_access(lab_test_id)
 
         update_dict = update_data.model_dump(exclude_unset=True)
-        if "test_type" in update_dict and not update_dict.get("test_name"):
+        if "test_definition_id" in update_dict and not update_dict.get("test_name"):
+            definition = await self.repo.get_lab_test_definition_by_id(
+                update_dict["test_definition_id"]
+            )
+            if not definition or not definition.is_active:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Selected lab test definition is not available.",
+                )
+            update_dict["test_name"] = definition.name
+        if "test_type" in update_dict and not update_dict.get("test_name") and update_dict.get("test_type"):
             update_dict["test_name"] = self._default_lab_test_name(
                 update_dict["test_type"]
             )
@@ -1408,7 +1497,7 @@ class PatientService:
             lab_test_id=lab_test_id,
             **result_data.model_dump(),
         )
-        self._apply_lab_result_indicator(lab_result)
+        await self._apply_parameter_definition_to_result(lab_result, lab_test)
         await self.repo.create_patient_lab_result(lab_result)
 
         lab_test.status = LabTestStatus.COMPLETED
@@ -1436,10 +1525,10 @@ class PatientService:
         update_dict = update_data.model_dump(exclude_unset=True)
         for field, value in update_dict.items():
             setattr(lab_result, field, value)
-        self._apply_lab_result_indicator(lab_result)
+        lab_test = await self.repo.get_patient_lab_test_by_id(lab_result.lab_test_id)
+        await self._apply_parameter_definition_to_result(lab_result, lab_test)
         await self.repo.update_patient_lab_result(lab_result)
 
-        lab_test = await self.repo.get_patient_lab_test_by_id(lab_result.lab_test_id)
         lab_test.reviewed_by_id = reviewed_by_id
         await self.repo.update_patient_lab_test(lab_test)
 
